@@ -14,6 +14,7 @@ describe("canonicalize", () => {
   it("encodes scalars and null", () => {
     expect(canonicalize("x")).toBe('"x"')
     expect(canonicalize(1.5)).toBe("1.5")
+    expect(canonicalize(true)).toBe("true")
     expect(canonicalize(false)).toBe("false")
     expect(canonicalize(null)).toBe("null")
   })
@@ -42,7 +43,6 @@ describe("cacheKeyFor", () => {
       model: "m",
       state: { a: 1 },
       questions: [{ id: "q", type: "noul", instructions: "x" }],
-      providerOptions: null,
       schemaVersion: 1,
     }
     const key = cacheKeyFor(base)
@@ -52,7 +52,6 @@ describe("cacheKeyFor", () => {
       { ...base, model: "other" },
       { ...base, state: { a: 2 } },
       { ...base, questions: [{ id: "q", type: "noul", instructions: "y" }] },
-      { ...base, providerOptions: { trace: true } },
       { ...base, schemaVersion: 2 },
     ]) {
       expect(cacheKeyFor(variant)).not.toBe(key)
@@ -65,7 +64,6 @@ describe("cacheKeyFor", () => {
       model: "m",
       state: "s",
       questions: [],
-      providerOptions: null,
       schemaVersion: 7,
     })
     expect(key).toBe(`v7:${sha256(canonicalize({
@@ -73,7 +71,6 @@ describe("cacheKeyFor", () => {
       model: "m",
       state: "s",
       questions: [],
-      providerOptions: null,
       schemaVersion: 7,
     }))}`)
   })

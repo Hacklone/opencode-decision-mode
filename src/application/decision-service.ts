@@ -1,13 +1,13 @@
 import {
   type Answer,
+  type PolicySpec,
   type ProviderId,
   type Question,
   type Usage,
   type Verdict,
+  policyFor,
 } from "../domain/decision-types"
-import type { PolicySpec } from "../domain/decision-types"
 import { applyVerdicts } from "../domain/verdict"
-import { policyFor } from "../domain/decision-types"
 import { BackendError, type BackendRegistry } from "../ports/decision-backend"
 import { CACHE_SCHEMA_VERSION, type DecisionCache } from "../ports/cache"
 import { cacheKeyFor } from "./cache-key"
@@ -18,7 +18,6 @@ export interface DecisionRequest {
   policy?: PolicySpec
   provider: ProviderId
   model: string
-  providerOptions?: unknown
   signal: AbortSignal
 }
 
@@ -50,7 +49,6 @@ export class DecisionService {
       model: request.model,
       state: request.state,
       questions: request.questions,
-      providerOptions: request.providerOptions ?? null,
       schemaVersion: CACHE_SCHEMA_VERSION,
     })
 

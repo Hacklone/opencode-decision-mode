@@ -52,7 +52,7 @@ async function makeDeps(options?: { reader?: SourceReader }) {
   const decision = new DecisionService(backends.registry, cache)
   const bulk = new BulkMapService(backends.registry, cache, store, reader, () => 0)
   const results = new ResultQueryService(store)
-  return { selection, backends, decision, bulk, results, workspaceRoot: null }
+  return { selection, backends, decision, bulk, results }
 }
 
 async function decisionDeps(): Promise<{ deps: Awaited<ReturnType<typeof makeDeps>>; backend: ReturnType<typeof makeBackend> }> {
@@ -74,7 +74,6 @@ async function decisionDeps(): Promise<{ deps: Awaited<ReturnType<typeof makeDep
     decision: new DecisionService(backends.registry, cache),
     bulk: new BulkMapService(backends.registry, cache, store, reader),
     results: new ResultQueryService(store),
-    workspaceRoot: null,
   }
   return { deps, backend }
 }

@@ -30,7 +30,14 @@ describe("SelectionStore", () => {
     await store.set({ model: "typesafe/jev-1.13" })
     expect(store.model()).toBe("typesafe/jev-1.13")
     await store.set({ provider: "openai" })
-    expect(store.get()).toEqual({ mode: "on", provider: "openai", model: "typesafe/jev-1.13" })
+    // A pin made for one provider is invalid elsewhere: switching clears it.
+    expect(store.get()).toEqual({ mode: "on", provider: "openai", model: null })
+    expect(store.model()).toBe(DEFAULT_MODELS.openai)
+    await store.set({ provider: "typesafe", model: "jev-preview" })
+    expect(store.get()).toEqual({ mode: "on", provider: "typesafe", model: "jev-preview" })
+    // Same-provider patches keep the pin.
+    await store.set({ mode: "off" })
+    expect(store.get()).toEqual({ mode: "off", provider: "typesafe", model: "jev-preview" })
   })
 })
 

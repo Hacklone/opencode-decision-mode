@@ -46,8 +46,9 @@ describe("StorageRunStore", () => {
     { index: 2, key: null, status: "error", error: "boom" },
   ]
 
-  it("persists paged results and the summary", async () => {
+  it("persists paged results and the summary, reassembling pages in order", async () => {
     const store = new StorageRunStore(kv(), 2)
+    // Pages are written out of order on purpose; retrieval must sort by page.
     await store.saveRun({ id: summary.id, summary }, [
       { runId: summary.id, page: 0, results: results.slice(0, 2) },
       { runId: summary.id, page: 1, results: results.slice(2) },

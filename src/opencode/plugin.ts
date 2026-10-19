@@ -42,7 +42,7 @@ export default Plugin.define({
     const bulk = new BulkMapService(backends.registry, cache, store, reader)
     const results = new ResultQueryService(store)
 
-    const tools = buildTools({ selection, backends, decision, bulk, results, workspaceRoot: ctx.location.directory })
+    const tools = buildTools({ selection, backends, decision, bulk, results })
     const toolRegistration = await ctx.tool.transform((editor) => {
       for (const tool of tools) {
         editor.add({
@@ -55,7 +55,7 @@ export default Plugin.define({
       }
     })
 
-    ctx.session.hook("context", (event: { tools: Record<string, unknown>; system: Array<{ type: string; text: string }> }) => {
+    const sessionHook = await ctx.session.hook("context", (event: { tools: Record<string, unknown>; system: Array<{ type: string; text: string }> }) => {
       if (selection.get().mode === "off") {
         for (const tool of tools) delete event.tools[tool.name]
         return
@@ -77,6 +77,7 @@ export default Plugin.define({
 
     return () => {
       toolRegistration.dispose()
+      sessionHook.dispose()
     }
   },
 })

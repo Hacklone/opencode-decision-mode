@@ -44,10 +44,13 @@ export class StorageRunStore implements RunStore {
     const summary = await this.getSummary(runId)
     if (summary === null) return null
     const entries = await this.storage.scan(`${RUNS_PREFIX}${runId}${PAGE_PREFIX}`)
+    // Storage scan order is unspecified; reassemble pages by their number.
+    const pages = entries
+      .map(({ value }) => (isPage(value) ? value : null))
+      .filter((page): page is { page: number; results: RecordResult[] } => page !== null)
+      .sort((a, b) => a.page - b.page)
     const results: RecordResult[] = []
-    for (const { value } of entries) {
-      if (isPage(value)) results.push(...value.results)
-    }
+    for (const page of pages) results.push(...page.results)
     return results
   }
 

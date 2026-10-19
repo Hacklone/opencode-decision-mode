@@ -6,8 +6,6 @@ export interface CacheFingerprint {
   model: string
   state: unknown
   questions: unknown
-  /** Provider-specific request options that alter semantics. */
-  providerOptions: unknown
   schemaVersion: number
 }
 

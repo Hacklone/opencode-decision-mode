@@ -46,6 +46,14 @@ describe("FsSourceReader", () => {
     await expect(reader.read("does-not-exist.csv", "csv")).rejects.toThrow(/cannot read source/)
   })
 
+  it("parses .tsv files with tab delimiters via the reader", async () => {
+    const root = await mkdtemp(join(tmpdir(), "decision-src-"))
+    await writeFile(join(root, "data.tsv"), "id\tname\n1\tgrace\n")
+    const reader = new FsSourceReader(root)
+    const records = await reader.read("data.tsv", "csv")
+    expect(records[0]!.fields).toEqual({ id: "1", name: "grace" })
+  })
+
   it("rejects directories and oversized files", async () => {
     const root = await mkdtemp(join(tmpdir(), "decision-src-"))
     const reader = new FsSourceReader(root)

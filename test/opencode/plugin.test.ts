@@ -40,7 +40,7 @@ function fakeCtx() {
       }),
     },
     session: {
-      hook: vi.fn((_event: string, hook: (e: never) => void) => {
+      hook: vi.fn(async (_event: string, hook: (e: never) => void) => {
         contextHooks.push(hook as never)
         return { dispose: vi.fn() }
       }),

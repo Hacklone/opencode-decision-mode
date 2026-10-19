@@ -3,7 +3,7 @@ import type { Answer, Usage } from "../../domain/decision-types"
 import { ESTIMATED_PRICING, estimateCost } from "../../domain/usage"
 import { BackendError, type BackendRequest, type BackendResponse, type DecisionBackend } from "../../ports/decision-backend"
 import { asNumber, asRecord, asString, toBackendError, withSignal } from "./normalize"
-import { normalizeAnswers } from "./openrouter-backend"
+import { normalizeAnswers } from "./answers"
 
 /**
  * TypeSafe direct backend (`POST https://api.typesafe.ai/v1/systemone`).
@@ -47,7 +47,7 @@ export class TypesafeBackend implements DecisionBackend {
     const body = asRecord(raw)
     if (body === null) throw new BackendError("typesafe: response was not an object")
 
-    const answers = normalizeAnswers(body["answers"], request.questions)
+    const answers = normalizeAnswers(body["answers"], request.questions, "typesafe")
     const usage = estimateTypesafeUsage(body["usage"])
     const resolvedModel = asString(body["model"]) ?? request.model
     return { provider: this.provider, requestedModel: request.model, resolvedModel, answers, usage }

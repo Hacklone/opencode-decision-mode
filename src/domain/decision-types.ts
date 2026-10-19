@@ -229,8 +229,6 @@ export const ZERO_USAGE: Usage = {
 
 export type Verdict = "PASS" | "REVIEW" | "FAIL"
 
-export const VERDICT_ORDER: Record<Verdict, number> = { PASS: 0, REVIEW: 1, FAIL: 2 }
-
 export interface VerdictPolicy {
   /** p >= reviewAt ⇒ REVIEW. */
   reviewAt: number

@@ -1,4 +1,4 @@
-import type { ProviderId } from "../domain/decision-types"
+import type { Answer, ProviderId } from "../domain/decision-types"
 import { DEFAULT_MODELS, PROVIDERS, isProviderId, parsePolicySpec, parseQuestions } from "../domain/decision-types"
 import type { DecisionService } from "../application/decision-service"
 import type { BulkMapService } from "../application/bulk-map-service"
@@ -13,7 +13,6 @@ export interface ToolDeps {
   decision: DecisionService
   bulk: BulkMapService
   results: ResultQueryService
-  workspaceRoot: string | null
 }
 
 export interface ToolDefinition {
@@ -302,7 +301,7 @@ function asInteger(value: unknown): number | undefined {
 }
 
 /** Token-efficient single-decision answers: the decision, not the full distribution. */
-export function compactAnswers(answers: Record<string, import("../domain/decision-types").Answer>) {
+export function compactAnswers(answers: Record<string, Answer>) {
   const out: Record<string, unknown> = {}
   for (const [id, answer] of Object.entries(answers)) {
     switch (answer.type) {

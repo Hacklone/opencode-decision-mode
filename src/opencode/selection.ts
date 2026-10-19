@@ -40,7 +40,15 @@ export class SelectionStore {
   }
 
   async set(patch: Partial<Selection>): Promise<Selection> {
-    const next = normalizeSelection({ ...this.current, ...patch })
+    // Switching providers without an explicit model clears a stale pin — a
+    // model id pinned for one provider is meaningless (and invalid) elsewhere.
+    const model =
+      patch.model !== undefined
+        ? patch.model
+        : patch.provider !== undefined && patch.provider !== this.current.provider
+          ? null
+          : this.current.model
+    const next = normalizeSelection({ ...this.current, ...patch, model })
     this.current = next
     await this.storage.set(KEY, next)
     return next

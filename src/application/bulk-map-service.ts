@@ -16,7 +16,7 @@ import { CACHE_SCHEMA_VERSION, type DecisionCache } from "../ports/cache"
 import { RUN_PAGE_SIZE, type RunStore, type StoredRunPage } from "../ports/run-store"
 import type { SourceReader, SourceRecord } from "../ports/source-reader"
 import { newRunId } from "./ids"
-import { projectState, RECORD_SENTINEL } from "./projection"
+import { projectState } from "./projection"
 import { cacheKeyFor } from "./cache-key"
 
 export interface MapRequest {
@@ -28,7 +28,6 @@ export interface MapRequest {
   policy?: PolicySpec
   provider: ProviderId
   model: string
-  providerOptions?: unknown
   concurrency: number
   offset?: number
   limit?: number
@@ -155,7 +154,6 @@ export class BulkMapService {
         model: request.model,
         state,
         questions: request.questions,
-        providerOptions: request.providerOptions ?? null,
         schemaVersion: CACHE_SCHEMA_VERSION,
       })
 
@@ -237,4 +235,3 @@ function abortError(): Error {
   return error
 }
 
-export { RECORD_SENTINEL }

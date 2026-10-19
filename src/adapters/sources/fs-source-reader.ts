@@ -35,13 +35,14 @@ export class FsSourceReader implements SourceReader {
       )
     }
     const content = await this.readFileFn(absolute, "utf8")
-    return this.parserFor(format).parse(content)
+    return this.parserFor(format, absolute).parse(content)
   }
 
-  private parserFor(format: SourceFormat) {
+  /** Delimiter follows the file extension: .tsv is tab-separated even though its format is "csv". */
+  private parserFor(format: SourceFormat, path: string) {
     switch (format) {
       case "csv":
-        return this.csv
+        return path.toLowerCase().endsWith(".tsv") ? this.tsv : this.csv
       case "jsonl":
         return this.jsonl
     }

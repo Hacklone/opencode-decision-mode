@@ -11,7 +11,8 @@ vi.mock("@openrouter/sdk", () => {
   return { OpenRouter }
 })
 
-import { OpenRouterBackend, normalizeAnswer, normalizeAnswers, normalizeUsage, normalizeProbabilityMap } from "../../../src/adapters/backends/openrouter-backend"
+import { OpenRouterBackend, normalizeUsage } from "../../../src/adapters/backends/openrouter-backend"
+import { normalizeAnswer, normalizeAnswers, normalizeProbabilityMap } from "../../../src/adapters/backends/answers"
 import { BackendError } from "../../../src/ports/decision-backend"
 
 const questions: Question[] = [
@@ -112,10 +113,10 @@ describe("OpenRouterBackend.decide", () => {
 
 describe("normalization helpers", () => {
   it("normalizeAnswer validates choice/score shapes", () => {
-    expect(() => normalizeAnswer({ type: "choice" }, questions[1]!)).toThrow(/missing selection/)
-    expect(() => normalizeAnswer({ type: "score", score: 9 }, questions[2]!)).toThrow(BackendError)
-    expect(() => normalizeAnswer({ type: "score", score: 0 }, questions[0]!)).toThrow(/score answer for noul question/)
-    const noLegend = normalizeAnswer({ type: "score", score: 1 }, questions[2]!)
+    expect(() => normalizeAnswer({ type: "choice" }, questions[1]!, "openrouter")).toThrow(/missing selection/)
+    expect(() => normalizeAnswer({ type: "score", score: 9 }, questions[2]!, "openrouter")).toThrow(BackendError)
+    expect(() => normalizeAnswer({ type: "score", score: 0 }, questions[0]!, "openrouter")).toThrow(/score answer for noul question/)
+    const noLegend = normalizeAnswer({ type: "score", score: 1 }, questions[2]!, "openrouter")
     expect(noLegend).toMatchObject({ score: 1, legend: "high" })
   })
 
@@ -127,6 +128,7 @@ describe("normalization helpers", () => {
         s: { type: "score", score: 0, legend: "low" },
       },
       questions,
+      "openrouter",
     )
     expect(Object.keys(answers)).toEqual(["b", "c", "s"])
     expect(answers["c"]).toEqual({ type: "choice", choice: "ham", probabilities: {} })
