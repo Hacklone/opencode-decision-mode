@@ -38,12 +38,17 @@ export interface MapOutcome {
   summary: RunSummary
   /** First records of the run for immediate inspection (token-efficient preview). */
   preview: RecordResult[]
+  /** Set when the run bailed out early on a systematic failure. */
+  aborted: { error: string; skipped: number } | null
 }
 
 export const MAX_RECORDS = 10_000
 export const DEFAULT_CONCURRENCY = 4
 export const MAX_CONCURRENCY = 32
 export const PREVIEW_SIZE = 10
+export const MAX_SAMPLE = 20
+/** Identical-signature errors that trigger a bail-out before spending the full input. */
+export const SYSTEMATIC_ABORT_AFTER = 6
 
 /**
  * Bulk map: read a source, project per-record state, decide every record with
@@ -88,6 +93,13 @@ export class BulkMapService {
     let cursor = 0
     let cachedCount = 0
 
+    // Systematic-failure bail: identical error signatures (digits masked so
+    // per-record values don't split a signature) abort the run early instead
+    // of burning the whole input on a broken assumption.
+    const errorSignatures = new Map<string, number>()
+    let systematicError: string | null = null
+    let skipped = 0
+
     const worker = async (): Promise<void> => {
       for (;;) {
         const slot = cursor
@@ -95,12 +107,30 @@ export class BulkMapService {
         if (slot >= records.length) return
         if (request.signal.aborted) throw abortError()
         const record = records[slot]!
+        if (systematicError !== null) {
+          results[slot] = {
+            index: record.index,
+            key: record.key,
+            status: "error",
+            error: `skipped after systematic failure: ${systematicError}`,
+            record: record.fields,
+          }
+          skipped += 1
+          continue
+        }
         const decided = await this.decideRecord(record, request, backend)
         if (decided.resolvedModel !== undefined) {
           resolvedModels.set(record.index, decided.resolvedModel)
         }
         if (decided.result.cacheHit) cachedCount += 1
         results[slot] = decided.result
+        if (decided.result.status === "error") {
+          // Invariant: decideRecord's only error path always attaches a message.
+          const signature = decided.result.error!.replace(/\d+(?:\.\d+)?/g, "#")
+          const count = (errorSignatures.get(signature) ?? 0) + 1
+          errorSignatures.set(signature, count)
+          if (count >= SYSTEMATIC_ABORT_AFTER) systematicError = decided.result.error!
+        }
       }
     }
 
@@ -139,7 +169,20 @@ export class BulkMapService {
 
     await this.store.saveRun({ id: summary.id, summary }, chunkResults(results))
 
-    return { summary, preview: results.slice(0, PREVIEW_SIZE) }
+    return {
+      summary,
+      preview: results.slice(0, PREVIEW_SIZE),
+      aborted: systematicError === null ? null : { error: systematicError, skipped },
+    }
+  }
+
+  /**
+   * Cheap peek: the first records of a source with no provider calls and no
+   * run — lets a controller inspect data shape before phrasing judgments.
+   */
+  async sample(request: { path: string; format: "csv" | "jsonl"; limit: number }): Promise<SourceRecord[]> {
+    const records = await this.reader.read(request.path, request.format)
+    return records.slice(0, Math.max(1, Math.min(Math.floor(request.limit), MAX_SAMPLE)))
   }
 
   private async decideRecord(
@@ -189,6 +232,7 @@ export class BulkMapService {
           key: record.key,
           status: "error",
           error: message,
+          record: record.fields,
         },
         resolvedModel: undefined,
       }
@@ -207,6 +251,7 @@ export class BulkMapService {
       index: record.index,
       key: record.key,
       status: "ok",
+      record: record.fields,
       answers,
       verdict,
       verdicts,

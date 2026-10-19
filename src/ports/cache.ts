@@ -24,4 +24,4 @@ export interface DecisionCache {
   set(key: string, entry: CachedEntry): Promise<void>
 }
 
-export const CACHE_SCHEMA_VERSION = 1
+export const CACHE_SCHEMA_VERSION = 2 // 2: providerOptions left the fingerprint (8dfa7e34)

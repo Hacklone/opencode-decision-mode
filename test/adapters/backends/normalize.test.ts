@@ -6,7 +6,7 @@ import {
   asRecord,
   asString,
   clamp01,
-  scoreIndex,
+  resolveScore,
   toBackendError,
   withSignal,
 } from "../../../src/adapters/backends/normalize"
@@ -58,14 +58,31 @@ describe("scalars", () => {
   })
 })
 
-describe("scoreIndex", () => {
-  it("accepts a valid integer index or an exact label", () => {
-    const criteria = ["low", "mid", "high"]
-    expect(scoreIndex(2, criteria)).toBe(2)
-    expect(scoreIndex("mid", criteria)).toBe(1)
-    expect(() => scoreIndex(3, criteria)).toThrow(BackendError)
-    expect(() => scoreIndex(-1, criteria)).toThrow(BackendError)
-    expect(() => scoreIndex("unknown", criteria)).toThrow(/does not match any criteria level/)
+describe("resolveScore", () => {
+  const criteria = ["low", "mid", "high"]
+
+  it("accepts integer indexes and exact labels", () => {
+    expect(resolveScore(2, criteria)).toEqual({ value: 2, index: 2 })
+    expect(resolveScore("mid", criteria)).toEqual({ value: 1, index: 1 })
+    expect(resolveScore(0, criteria)).toEqual({ value: 0, index: 0 })
+  })
+
+  it("accepts fractional positions, rounding to the nearest level", () => {
+    expect(resolveScore(1.33, criteria)).toEqual({ value: 1.33, index: 1 })
+    expect(resolveScore(1.6, criteria)).toEqual({ value: 1.6, index: 2 })
+  })
+
+  it("clamps numbers outside the level range", () => {
+    expect(resolveScore(7, criteria)).toEqual({ value: 2, index: 2 })
+    expect(resolveScore(-1, criteria)).toEqual({ value: 0, index: 0 })
+  })
+
+  it("rejects unknown labels, non-finite numbers and other types", () => {
+    expect(() => resolveScore("unknown", criteria)).toThrow(/does not match any criteria level/)
+    expect(() => resolveScore(Number.NaN, criteria)).toThrow(BackendError)
+    expect(() => resolveScore(Number.POSITIVE_INFINITY, criteria)).toThrow(BackendError)
+    expect(() => resolveScore(true, criteria)).toThrow(BackendError)
+    expect(() => resolveScore(null, criteria)).toThrow(BackendError)
   })
 })
 

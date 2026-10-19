@@ -3,13 +3,35 @@
  * everything downstream (application, ports, adapters) builds on these types.
  */
 
-/** Decision providers supported by the plugin. */
-export type ProviderId = "openrouter" | "typesafe" | "openai"
+/** Decision providers supported by the plugin. The tuple is the single
+ * source of the id list; zod enums and clients derive from it. */
+export const PROVIDER_IDS = ["openrouter", "typesafe", "openai"] as const
 
-export const PROVIDERS: readonly ProviderId[] = ["openrouter", "typesafe", "openai"]
+export type ProviderId = (typeof PROVIDER_IDS)[number]
+
+export const PROVIDERS: readonly ProviderId[] = PROVIDER_IDS
 
 export function isProviderId(value: unknown): value is ProviderId {
-  return typeof value === "string" && (PROVIDERS as readonly string[]).includes(value)
+  return typeof value === "string" && (PROVIDER_IDS as readonly string[]).includes(value)
+}
+
+/** Short forms used wherever space is scarce (footer, command arguments). */
+export const PROVIDER_SHORT: Record<ProviderId, string> = {
+  openrouter: "or",
+  typesafe: "ts",
+  openai: "oai",
+}
+
+/** Canonical id or short form -> provider id, for user-facing parsers. */
+export const PROVIDER_ALIASES = Object.fromEntries(
+  PROVIDERS.flatMap((id) => [[id, id], [PROVIDER_SHORT[id], id]] as [string, ProviderId][]),
+) as Record<string, ProviderId>
+
+/** Environment variable each provider's credential comes from. */
+export const CREDENTIAL_ENV: Record<ProviderId, string> = {
+  openrouter: "OPENROUTER_API_KEY",
+  typesafe: "TYPESAFE_API_KEY",
+  openai: "OPENAI_API_KEY",
 }
 
 /** Default model per provider when the user has not pinned one. */
@@ -191,9 +213,12 @@ export interface ChoiceAnswer {
 
 export interface ScoreAnswer {
   type: "score"
-  /** Index of the selected level into the question's criteria (0-based). */
+  /**
+   * Probability-weighted position along the levels (0-based, may be
+   * fractional; clamped into the criteria range by the backend).
+   */
   score: number
-  /** Provider legend text when supplied. */
+  /** Nearest level label (provider legend when supplied; null only on legacy stored runs). */
   legend: string | null
   /** Distribution over level labels; compact result views omit it. */
   probabilities?: Record<string, number>
@@ -305,6 +330,9 @@ export interface RecordResult {
   key: string | null
   status: RecordStatus
   error?: string
+  /** Snapshot of the source record's fields, taken at run time; lets result
+   * consumers report record content without re-reading (or re-judging) the file. */
+  record?: Record<string, unknown>
   answers?: Record<string, Answer>
   /** Worst verdict across boolean questions with a policy. */
   verdict?: Verdict

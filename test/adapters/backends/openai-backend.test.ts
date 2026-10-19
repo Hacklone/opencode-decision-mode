@@ -125,12 +125,19 @@ describe("OpenAIBackend.decide", () => {
     ).rejects.toThrow(/missing selection/)
 
     decisionsCreateMock.mockResolvedValue({
-      answers: [{ type: "score", name: "s", score: 5 }],
+      answers: [{ type: "score", name: "s", score: "nope" }],
       usage: {},
     })
     await expect(
       new OpenAIBackend("k").decide({ state: "s", questions: [questions[2]!], model: "m", signal }),
     ).rejects.toThrow(/does not match any criteria level/)
+
+    decisionsCreateMock.mockResolvedValue({
+      answers: [{ type: "score", name: "s", score: 5 }],
+      usage: {},
+    })
+    const clamped = await new OpenAIBackend("k").decide({ state: "s", questions: [questions[2]!], model: "m", signal })
+    expect(clamped.answers["s"]).toMatchObject({ score: 1, legend: "high" })
 
     decisionsCreateMock.mockResolvedValue({
       answers: [{ type: "score", name: "s", score: 1 }],

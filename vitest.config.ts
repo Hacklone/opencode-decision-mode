@@ -8,8 +8,8 @@ export default defineConfig({
       include: ["src/**/*.ts"],
       // The TUI entry is JSX rendered by OpenCode's OpenTUI runtime; it is
       // exercised manually against a live TUI, not under vitest.
-      // src/ports/storage.ts is a type-only contract (no runtime statements).
-      exclude: ["src/tui.tsx", "src/ports/storage.ts"],
+      // src/ports/storage.ts and src/ports/file-sink.ts are type-only contracts (no runtime statements).
+      exclude: ["src/tui.tsx", "src/ports/storage.ts", "src/ports/file-sink.ts"],
       thresholds: {
         statements: 100,
         branches: 100,

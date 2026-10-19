@@ -1,6 +1,6 @@
 import type { Answer, Question } from "../../domain/decision-types"
 import { BackendError } from "../../ports/decision-backend"
-import { asNumber, asRecord, asString, clamp01, scoreIndex } from "./normalize"
+import { asNumber, asRecord, asString, clamp01, resolveScore } from "./normalize"
 
 /**
  * Shared answer normalization for the OpenRouter and TypeSafe backends, whose
@@ -50,13 +50,13 @@ export function normalizeAnswer(record: Record<string, unknown>, question: Quest
     if (question.type !== "score") {
       throw new BackendError(`${provider}: score answer for ${question.type} question ${question.id}`)
     }
-    const score = scoreIndex(record["score"], question.criteria)
+    const { value, index } = resolveScore(record["score"], question.criteria)
     const legend = asString(record["legend"])
     const answer: Answer = {
       type: "score",
-      score,
-      // scoreIndex guarantees a valid index, so criteria[score] is always defined.
-      legend: legend ?? question.criteria[score]!,
+      score: value,
+      // resolveScore guarantees a valid index, so criteria[index] is always defined.
+      legend: legend ?? question.criteria[index]!,
       probabilities: normalizeProbabilityMap(record["probabilities"]),
     }
     const confidence = asNumber(record["confidence"])

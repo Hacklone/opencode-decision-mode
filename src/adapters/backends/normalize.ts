@@ -48,14 +48,21 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
-/** Resolve a score answer (index or label) into a 0-based criteria index. */
-export function scoreIndex(score: unknown, criteria: readonly string[]): number {
-  if (typeof score === "number" && Number.isInteger(score) && score >= 0 && score < criteria.length) {
-    return score
+/**
+ * Resolve a score answer into a position along the levels. A score is a
+ * probability-weighted position, so fractional values (e.g. 1.33) are
+ * legitimate: accept any finite number, clamped to the level range, and round
+ * to the nearest level for labeling. An exact label string resolves to that
+ * level. Anything else is malformed — hard error, never silently coerced.
+ */
+export function resolveScore(score: unknown, criteria: readonly string[]): { value: number; index: number } {
+  if (typeof score === "number" && Number.isFinite(score)) {
+    const value = Math.min(criteria.length - 1, Math.max(0, score))
+    return { value, index: Math.round(value) }
   }
   if (typeof score === "string") {
     const index = criteria.indexOf(score)
-    if (index >= 0) return index
+    if (index >= 0) return { value: index, index }
   }
   throw new BackendError(`score answer ${JSON.stringify(score)} does not match any criteria level`)
 }

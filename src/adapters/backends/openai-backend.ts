@@ -2,7 +2,7 @@ import OpenAI from "openai"
 import type { Answer, Question, Usage } from "../../domain/decision-types"
 import { ESTIMATED_PRICING, estimateCost } from "../../domain/usage"
 import { BackendError, type BackendRequest, type BackendResponse, type DecisionBackend } from "../../ports/decision-backend"
-import { asNumber, asRecord, asString, clamp01, scoreIndex, toBackendError, withSignal } from "./normalize"
+import { asNumber, asRecord, asString, clamp01, resolveScore, toBackendError, withSignal } from "./normalize"
 
 /**
  * OpenAI native Decisions backend (`POST /v1/decisions`, model gpt-6-luna).
@@ -110,12 +110,12 @@ function normalizeOpenAiAnswer(record: Record<string, unknown>, question: Questi
     if (question.type !== "score") {
       throw new BackendError(`openai: score answer for ${question.type} question ${question.id}`)
     }
-    const score = scoreIndex(record["score"], question.criteria)
+    const { value, index } = resolveScore(record["score"], question.criteria)
     const answer: Answer = {
       type: "score",
-      score,
-      // scoreIndex guarantees a valid index, so criteria[score] is always defined.
-      legend: question.criteria[score]!,
+      score: value,
+      // resolveScore guarantees a valid index, so criteria[index] is always defined.
+      legend: question.criteria[index]!,
       probabilities: listToMap(record["probabilities"], "label"),
     }
     const confidence = asNumber(record["confidence"])

@@ -94,6 +94,62 @@ describe("BulkMapService", () => {
     expect(preview).toHaveLength(5)
     expect(store.saved.summaries).toHaveLength(1)
     expect(store.saved.pages).toHaveLength(1)
+    // Record snapshots persist with the results so reports can quote content.
+    expect(store.saved.pages[0]!.results[0]!.record).toEqual({ index: 0, text: "row 0" })
+  })
+
+  it("snapshots record fields on error results too", async () => {
+    const { bulk, store } = service({ rows: records(2), backend: makeBackend(() => true) })
+    await bulk.map({ ...baseRequest })
+    const stored = store.saved.pages.flatMap((page) => page.results)
+    expect(stored).toHaveLength(2)
+    expect(stored.every((r) => r.status === "error" && r.record !== undefined)).toBe(true)
+  })
+
+  it("bails out early once identical failures become systematic", async () => {
+    const { bulk, backend } = service({ rows: records(20), backend: makeBackend(() => true) })
+    const { summary, aborted } = await bulk.map({ ...baseRequest })
+    expect(aborted).not.toBeNull()
+    expect(aborted!.error).toBe("provider hiccup")
+    // 6 errors trip the bail; at most concurrency-1 extra calls were in flight.
+    expect(vi.mocked(backend.decide).mock.calls.length).toBeLessThanOrEqual(9)
+    expect(aborted!.skipped).toBe(20 - vi.mocked(backend.decide).mock.calls.length)
+    // Skipped records still get honest error results (no provider call) with snapshots.
+    expect(summary.error).toBe(20)
+    expect(summary.total).toBe(20)
+  })
+
+  it("groups error signatures that differ only in numbers", async () => {
+    // Per-record varying numbers (e.g. fractional score values) must count as
+    // the SAME systematic failure, not eleven unrelated one-offs.
+    const backend = {
+      provider: "openrouter",
+      decide: vi.fn(async (request: { state: unknown }) => {
+        const index = (request.state as { index: number }).index
+        throw new BackendError(`score answer ${1 + index * 0.37} does not match any criteria level`)
+      }),
+    } as never
+    const { bulk } = service({ rows: records(12), backend })
+    const { aborted } = await bulk.map({ ...baseRequest })
+    expect(aborted).not.toBeNull()
+    expect(aborted!.error).toMatch(/does not match any criteria level/)
+  })
+
+  it("does not bail below the systematic threshold", async () => {
+    const { bulk } = service({ rows: records(5), backend: makeBackend(() => true) })
+    const { aborted, summary } = await bulk.map({ ...baseRequest })
+    expect(aborted).toBeNull()
+    expect(summary.error).toBe(5)
+  })
+
+  it("samples records without provider calls or a run", async () => {
+    const { bulk, backend, store } = service({ rows: records(30) })
+    expect((await bulk.sample({ path: "/tmp/x.csv", format: "csv", limit: 3 })).map((r) => r.index)).toEqual([0, 1, 2])
+    // Clamped to [1, MAX_SAMPLE]; no backend calls, no persisted run.
+    expect(await bulk.sample({ path: "/tmp/x.csv", format: "csv", limit: 500 })).toHaveLength(20)
+    expect(await bulk.sample({ path: "/tmp/x.csv", format: "csv", limit: 0 })).toHaveLength(1)
+    expect(backend.decide).not.toHaveBeenCalled()
+    expect(store.saved.summaries).toEqual([])
   })
 
   it("isolates per-record errors without failing the run", async () => {

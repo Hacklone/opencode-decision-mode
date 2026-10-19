@@ -68,15 +68,33 @@ round-trip returns answers, verdicts, provider cost, and cache hits.
 
 ## Plugin-specific invariants (from the spec)
 
-- **Off mode costs zero tokens**: tools registered but stripped per-request in
-  the `context` hook; no instruction pushed. On mode pushes ~3 lines, nothing more.
+- **Off mode costs zero tokens**: visibility is enforced at the tool
+  registry — the transform registers nothing while off and `ctx.tool.reload()`
+  re-runs it when `/decision` flips the mode (empirically the Code Mode
+  catalog mirrors the registry, NOT the per-request `event.tools`, so
+  deleting those keys does nothing). No instruction is pushed while off;
+  on mode pushes ~3 lines, nothing more.
+- **Clients agree through the server**: selection state is server-owned; the
+  TUI uses RPC + the `/decision` selector, every other client (web, app, API)
+  uses the `decision-mode` server command — deliberately renamed because a
+  same-named server command shadows the TUI client slash entry (empirical:
+  Enter then submits the literal text to the model). Command feedback is
+  admitted via `session.synthetic` with `resume: false` — empirically
+  synthetic input schedules a model turn by default, which would silently
+  wake the controller on every toggle.
 - **One record + all its questions = one provider request.** Never pack
   multiple records into one call.
 - **Cache** keys are content hashes over {provider, model, state, questions,
   schemaVersion}; only successful responses are cached; verdict policies are
   applied *after* cache retrieval (policy is not part of the key).
 - **Errors are semantic answers' siblings**: per-record OK/ERROR in runs; a
-  backend error never corrupts other records.
+  backend error never corrupts other records. When 6 failures share the same
+  signature (digits masked), the run bails out early and the rest are marked
+  `skipped after systematic failure: …` — a broken assumption must not burn
+  the whole input; the tool response carries `aborted` + a warning.
+- **Score answers are positions, not indexes**: Jev returns
+  probability-weighted fractional positions (e.g. 1.33); backends clamp to the
+  level range and label with the nearest level. Never reject a finite number.
 - **Usage honesty**: provider-reported cost is reported as such; estimates are
   labeled `"estimated"`, unknowns stay `null` (never coerced to zero).
 - Run results persist in chunks (`runs/<id>/p/<page>`, summary written last);

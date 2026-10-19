@@ -3,11 +3,12 @@ import { buildTools, compactAnswers, reportProgress, resolveTarget, type ToolCon
 import { DecisionService } from "../../src/application/decision-service"
 import { BulkMapService } from "../../src/application/bulk-map-service"
 import { ResultQueryService } from "../../src/application/result-query-service"
+import { ResultsExportService } from "../../src/application/export-service"
 import { BackendManager } from "../../src/opencode/backend-manager"
 import { SelectionStore } from "../../src/opencode/selection"
 import { StorageCache } from "../../src/adapters/persistence/opencode-cache"
 import { StorageRunStore } from "../../src/adapters/persistence/opencode-run-store"
-import type { BackendRegistry } from "../../src/ports/decision-backend"
+import { BackendError, type BackendRegistry } from "../../src/ports/decision-backend"
 import type { CredentialSource } from "../../src/ports/credential-source"
 import type { SourceReader } from "../../src/ports/source-reader"
 import { kv } from "../fakes"
@@ -15,24 +16,37 @@ import { kv } from "../fakes"
 const signal = new AbortController().signal
 const context: ToolContext = { signal, progress: vi.fn(async () => {}) }
 
-const question = { id: "b", type: "noul", instructions: "is it spam?" }
+import type { Question } from "../../src/domain/decision-types"
 
-function makeBackend(): NonNullable<BackendRegistry["openrouter"]> {
+const question: Question = { id: "b", type: "noul", instructions: "is it spam?" }
+
+function memorySink() {
+  const files = new Map<string, string>()
+  return {
+    files,
+    sink: { write: async (path: string, content: string) => { files.set(path, content) } },
+  }
+}
+
+function makeBackend(fail: (index: number) => boolean = () => false): NonNullable<BackendRegistry["openrouter"]> {
   return {
     provider: "openrouter",
-    decide: vi.fn(async (request: { questions: Array<{ id: string; type: string; criteria?: unknown }> }) => ({
-      provider: "openrouter" as const,
-      requestedModel: "typesafe/jev-1.14",
-      resolvedModel: "typesafe/jev-1.14-20261001",
-      answers: Object.fromEntries(
-        request.questions.map((q) => {
-          if (q.type === "noul") return [q.id, { type: "noul", pTrue: 0.95 }]
-          if (q.type === "choice") return [q.id, { type: "choice", choice: Object.keys(q.criteria ?? {})[0]!, probabilities: {} }]
-          return [q.id, { type: "score", score: 0, legend: (q.criteria as string[])[0]!, probabilities: {} }]
-        }),
-      ),
-      usage: { inputTokens: 10, outputTokens: 2, costUsd: 0.0007, costSource: "provider" as const },
-    })),
+    decide: vi.fn(async (request: { state: unknown; questions: Array<{ id: string; type: string; criteria?: unknown }> }) => {
+      if (fail(Number((request.state as { index?: number }).index ?? -1))) throw new BackendError("provider hiccup")
+      return {
+        provider: "openrouter" as const,
+        requestedModel: "typesafe/jev-1.14",
+        resolvedModel: "typesafe/jev-1.14-20261001",
+        answers: Object.fromEntries(
+          request.questions.map((q) => {
+            if (q.type === "noul") return [q.id, { type: "noul", pTrue: 0.95 }]
+            if (q.type === "choice") return [q.id, { type: "choice", choice: Object.keys(q.criteria ?? {})[0]!, probabilities: {} }]
+            return [q.id, { type: "score", score: 0, legend: (q.criteria as string[])[0]!, probabilities: {} }]
+          }),
+        ),
+        usage: { inputTokens: 10, outputTokens: 2, costUsd: 0.0007, costSource: "provider" as const },
+      }
+    }),
   } as never
 }
 
@@ -52,11 +66,20 @@ async function makeDeps(options?: { reader?: SourceReader }) {
   const decision = new DecisionService(backends.registry, cache)
   const bulk = new BulkMapService(backends.registry, cache, store, reader, () => 0)
   const results = new ResultQueryService(store)
-  return { selection, backends, decision, bulk, results }
+  const { files, sink } = memorySink()
+  const exporter = new ResultsExportService(store, sink)
+  return { selection, backends, decision, bulk, results, exporter, files }
 }
 
-async function decisionDeps(): Promise<{ deps: Awaited<ReturnType<typeof makeDeps>>; backend: ReturnType<typeof makeBackend> }> {
-  const backend = makeBackend()
+async function decisionDeps(options?: {
+  fail?: (index: number) => boolean
+  rows?: number
+}): Promise<{
+  deps: Awaited<ReturnType<typeof makeDeps>>
+  backend: ReturnType<typeof makeBackend>
+  files: Map<string, string>
+}> {
+  const backend = makeBackend(options?.fail ?? (() => false))
   const selection = new SelectionStore(kv())
   await selection.load()
   const backends = new BackendManager({
@@ -67,15 +90,23 @@ async function decisionDeps(): Promise<{ deps: Awaited<ReturnType<typeof makeDep
   backends.registry["openrouter"] = backend
   const cache = new StorageCache(kv())
   const store = new StorageRunStore(kv())
-  const reader: SourceReader = { read: async () => [{ index: 0, key: "1", fields: { text: "hi" } }] }
-  const deps = {
+  const rows = Array.from({ length: options?.rows ?? 1 }, (_, i) => ({
+    index: i,
+    key: String(i + 1),
+    fields: i === 0 ? { text: "hi" } : { index: i, text: `row ${i}` },
+  }))
+  const reader: SourceReader = { read: async () => rows }
+  const { files, sink } = memorySink()
+  const deps: Awaited<ReturnType<typeof makeDeps>> = {
     selection,
     backends,
     decision: new DecisionService(backends.registry, cache),
     bulk: new BulkMapService(backends.registry, cache, store, reader),
     results: new ResultQueryService(store),
+    exporter: new ResultsExportService(store, sink),
+    files,
   }
-  return { deps, backend }
+  return { deps, backend, files }
 }
 
 describe("decision tool", () => {
@@ -153,9 +184,49 @@ describe("decision_map tool", () => {
     )
     expect(reader.read).toHaveBeenCalledWith("weird.bin", "jsonl")
   })
+
+  it("peeks at records with source.sample without judging or requiring state/questions", async () => {
+    const reader: SourceReader = {
+      read: vi.fn(async () => [
+        { index: 0, key: "1", fields: { text: "hi" } },
+        { index: 1, key: null, fields: { text: "there" } },
+      ]),
+    }
+    const deps = await makeDeps({ reader })
+    const map = buildTools(deps)[1]!
+    const output = JSON.parse((await map.execute({ source: { path: "x.csv", sample: 5 } }, context)).content)
+    expect(output).toEqual({
+      path: "x.csv",
+      format: "csv",
+      sampled: 2,
+      records: [
+        { index: 0, key: "1", fields: { text: "hi" } },
+        { index: 1, key: null, fields: { text: "there" } },
+      ],
+    })
+  })
+
+  it("requires state when actually mapping", async () => {
+    const { deps } = await decisionDeps()
+    const map = buildTools(deps)[1]!
+    await expect(map.execute({ source: { path: "x.csv" }, questions: [question] }, context)).rejects.toThrow(
+      /state is required/,
+    )
+  })
 })
 
 describe("decision_results tool", () => {
+  it("rejects unknown status/verdict filter values", async () => {
+    const { deps } = await decisionDeps()
+    const resultsTool = buildTools(deps)[2]!
+    await expect(resultsTool.execute({ run: "r", status: "maybe" }, context)).rejects.toThrow(
+      'status must be "ok" or "error"',
+    )
+    await expect(resultsTool.execute({ run: "r", verdict: "MAYBE" }, context)).rejects.toThrow(
+      'verdict must be "PASS", "REVIEW" or "FAIL"',
+    )
+  })
+
   it("lists runs when no run id is given", async () => {
     const { deps } = await decisionDeps()
     const resultsTool = buildTools(deps)[2]!
@@ -213,6 +284,141 @@ describe("decision_results tool", () => {
     )
     expect(errors.matched).toBe(0)
     await expect(resultsTool.execute({ run: "nope" }, context)).rejects.toThrow(/unknown run/)
+  })
+})
+
+describe("file export", () => {
+  it("decision_map writes the full result set and returns only metadata", async () => {
+    const { deps, files } = await decisionDeps()
+    const map = buildTools(deps)[1]!
+    const output = JSON.parse(
+      (
+        await map.execute(
+          { source: { path: "data.csv" }, state: "$record", questions: [question], output: { path: "out/results.csv" } },
+          context,
+        )
+      ).content,
+    )
+    expect(output.run).toBe(output.export.run)
+    expect(output.export).toMatchObject({ path: "out/results.csv", format: "csv", records: 1, total: 1 })
+    expect(output.export.sha256).toMatch(/^[0-9a-f]{64}$/)
+    const written = files.get("out/results.csv")!
+    expect(written.split("\n")).toEqual([
+      "_index,_key,_status,_error,b,b_verdict,text",
+      "0,1,ok,,0.95,FAIL,hi",
+      "",
+    ])
+    expect(output.export.bytes).toBe(new TextEncoder().encode(written).length)
+  })
+
+  it("decision_results output exports jsonl losslessly and honors filters", async () => {
+    const { deps, files } = await decisionDeps()
+    const map = buildTools(deps)[1]!
+    const resultsTool = buildTools(deps)[2]!
+    const run = JSON.parse(
+      (await map.execute({ source: { path: "data.csv" }, state: "$record", questions: [question] }, context)).content,
+    )
+    const exported = JSON.parse(
+      (await resultsTool.execute({ run: run.run, output: { path: "res.jsonl" } }, context)).content,
+    )
+    expect(Object.keys(exported)).toEqual(["export"])
+    expect(exported.export.records).toBe(1)
+    const row = JSON.parse(files.get("res.jsonl")!.trim())
+    expect(row).toMatchObject({ index: 0, key: "1", status: "ok", answers: { b: { type: "noul" } }, record: { text: "hi" } })
+    expect(row.usage).toBeDefined()
+
+    const none = JSON.parse(
+      (await resultsTool.execute({ run: run.run, status: "error", output: { path: "errs.csv" } }, context)).content,
+    )
+    expect(none.export).toMatchObject({ records: 0, total: 1, format: "csv" })
+    expect(files.get("errs.csv")).toBe("_index,_key,_status,_error\n")
+
+    await expect(resultsTool.execute({ run: "nope", output: { path: "x.csv" } }, context)).rejects.toThrow(/unknown run/)
+  })
+
+  it("validates output shape and format inference", async () => {
+    const { deps } = await decisionDeps()
+    const map = buildTools(deps)[1]!
+    await expect(
+      map.execute({ source: { path: "d.csv" }, state: "$record", questions: [question], output: "junk" }, context),
+    ).rejects.toThrow(/output must be an object/)
+    await expect(
+      map.execute({ source: { path: "d.csv" }, state: "$record", questions: [question], output: { path: "" } }, context),
+    ).rejects.toThrow(/output.path must be a non-empty string/)
+    await expect(
+      map.execute({ source: { path: "d.csv" }, state: "$record", questions: [question], output: { path: "out.bin" } }, context),
+    ).rejects.toThrow(/cannot infer output format/)
+    // Validation happens before any provider spend: no run was created.
+    const resultsTool = buildTools(deps)[2]!
+    expect(JSON.parse((await resultsTool.execute({}, context)).content).runs).toEqual([])
+  })
+})
+
+describe("polarity warnings", () => {
+  it("does not warn when no question is noul", async () => {
+    const { deps } = await decisionDeps()
+    const decision = buildTools(deps)[0]!
+    const single = JSON.parse(
+      (
+        await decision.execute(
+          { state: "x", questions: [{ id: "c", type: "choice", instructions: "pick", criteria: { a: null } }] },
+          context,
+        )
+      ).content,
+    )
+    expect(single.warnings).toBeUndefined()
+  })
+
+  it("surfaces warnings in decision and decision_map responses", async () => {
+    const { deps } = await decisionDeps()
+    const decision = buildTools(deps)[0]!
+    const map = buildTools(deps)[1]!
+    const single = JSON.parse((await decision.execute({ state: "x", questions: [question] }, context)).content)
+    expect(single.warnings?.[0]).toMatch(/TRUE=bad polarity/)
+    const mapped = JSON.parse(
+      (await map.execute({ source: { path: "d.csv" }, state: "$record", questions: [question] }, context)).content,
+    )
+    expect(mapped.warnings?.[0]).toMatch(/TRUE=bad polarity/)
+    const explicit = JSON.parse(
+      (
+        await map.execute(
+          { source: { path: "d2.csv" }, state: "$record", questions: [question], policy: { reviewAt: 0.4, failAt: 0.9 } },
+          context,
+        )
+      ).content,
+    )
+    expect(explicit.warnings).toBeUndefined()
+  })
+})
+
+describe("systematic failure surfacing", () => {
+  it("decision_map reports aborted and warns when the run bails out", async () => {
+    const { deps, backend } = await decisionDeps({ fail: () => true, rows: 12 })
+    const map = buildTools(deps)[1]!
+    const output = JSON.parse(
+      (await map.execute({ source: { path: "data.csv" }, state: "$record", questions: [question] }, context)).content,
+    )
+    expect(output.aborted).toMatchObject({ error: "provider hiccup" })
+    expect(output.warnings[0]).toMatch(/Systematic failure: provider hiccup hit 6 records; \d+ remaining records were skipped/)
+    expect(vi.mocked(backend.decide).mock.calls.length).toBeLessThanOrEqual(9)
+    expect(output.summary.error).toBe(12)
+  })
+
+  it("warns on a high error rate without aborting", async () => {
+    // Only records with an `index` field (rows 1..3) fail: 3/4 = 75% errors,
+    // below the systematic threshold of 6 identical failures.
+    const { deps } = await decisionDeps({ fail: (i) => i >= 1, rows: 4 })
+    const map = buildTools(deps)[1]!
+    const output = JSON.parse(
+      (
+        await map.execute(
+          { source: { path: "data.csv" }, state: "$record", questions: [question], policy: { reviewAt: 0.6, failAt: 0.85 } },
+          context,
+        )
+      ).content,
+    )
+    expect(output.aborted).toBeUndefined()
+    expect(output.warnings).toEqual([expect.stringMatching(/High error rate \(3\/4\)/)])
   })
 })
 

@@ -46,7 +46,7 @@ function store(results: RecordResult[]): RunStore {
 }
 
 const rows: RecordResult[] = [
-  result({ index: 0 }),
+  result({ index: 0, record: { text: "row zero" } }),
   result({ index: 1, status: "error", error: "boom", answers: undefined, verdict: undefined, verdicts: undefined, usage: undefined }),
   result({ index: 2, verdict: "PASS", verdicts: { b: "PASS" }, cacheHit: true }),
 ]
@@ -90,6 +90,14 @@ describe("ResultQueryService", () => {
     const full = await service.query({ run: summary.id, offset: 0, limit: 1, detail: "full" })
     expect(full.results[0]!.usage).toBeDefined()
     expect(full.results[0]!.answers!["c"]).toMatchObject({ probabilities: { spam: 0.9, ham: 0.1 } })
+  })
+
+  it("keeps the record snapshot in full detail and drops it in compact", async () => {
+    const service = new ResultQueryService(store(rows))
+    const compact = await service.query({ run: summary.id, limit: 1 })
+    expect(compact.results[0]!.record).toBeUndefined()
+    const full = await service.query({ run: summary.id, limit: 1, detail: "full" })
+    expect(full.results[0]!.record).toEqual({ text: "row zero" })
   })
 
   it("compacts error records without inventing fields", async () => {

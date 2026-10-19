@@ -114,7 +114,10 @@ describe("OpenRouterBackend.decide", () => {
 describe("normalization helpers", () => {
   it("normalizeAnswer validates choice/score shapes", () => {
     expect(() => normalizeAnswer({ type: "choice" }, questions[1]!, "openrouter")).toThrow(/missing selection/)
-    expect(() => normalizeAnswer({ type: "score", score: 9 }, questions[2]!, "openrouter")).toThrow(BackendError)
+    // Fractional scores are legitimate (probability-weighted position); numbers
+    // outside the range clamp to the nearest level instead of failing.
+    expect(normalizeAnswer({ type: "score", score: 9 }, questions[2]!, "openrouter")).toMatchObject({ score: 1, legend: "high" })
+    expect(normalizeAnswer({ type: "score", score: 0.4 }, questions[2]!, "openrouter")).toMatchObject({ score: 0.4, legend: "low" })
     expect(() => normalizeAnswer({ type: "score", score: 0 }, questions[0]!, "openrouter")).toThrow(/score answer for noul question/)
     const noLegend = normalizeAnswer({ type: "score", score: 1 }, questions[2]!, "openrouter")
     expect(noLegend).toMatchObject({ score: 1, legend: "high" })
