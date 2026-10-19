@@ -13,7 +13,7 @@ and other clients use the `/decision-mode` command:
 ## Install
 
 ```sh
-opencode plugin add opencode-decision-mode
+opencode plugin add @coool/opencode-decision-mode
 ```
 
 Or link this directory into `.opencode/plugins/decision-mode/` in your project.
