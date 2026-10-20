@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
+  CONTEXT_KEY,
   ProjectionError,
+  composeContext,
   formatFromPath,
   interpolate,
   lookupPath,
@@ -65,6 +67,32 @@ describe("projectRecord", () => {
   it("resolves dot paths but keys the output by the name as given", () => {
     const r = record({ meta: { age: 30 } })
     expect(projectRecord(["meta.age"], r)).toEqual({ "meta.age": 30 })
+  })
+})
+
+describe("composeContext", () => {
+  it("prepends to string states", () => {
+    expect(composeContext("Frame.", "Row {{text}}")).toBe("Frame.\n\nRow {{text}}")
+  })
+
+  it("adds the reserved $context key to object states", () => {
+    expect(composeContext("Frame.", { text: "hi", n: 2 })).toEqual({
+      [CONTEXT_KEY]: "Frame.",
+      text: "hi",
+      n: 2,
+    })
+  })
+
+  it("prepends as the first element of array states", () => {
+    expect(composeContext("Frame.", ["a", 2])).toEqual(["Frame.", "a", 2])
+  })
+
+  it("rejects a state that already carries the reserved key", () => {
+    expect(() => composeContext("Frame.", { [CONTEXT_KEY]: "sneaky" })).toThrow(/reserved/)
+  })
+
+  it("rejects bare scalar states", () => {
+    expect(() => composeContext("Frame.", 7)).toThrow(/string, object or array/)
   })
 })
 

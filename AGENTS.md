@@ -105,6 +105,15 @@ round-trip returns answers, verdicts, provider cost, and cache hits.
   sends the whole row and turns prior scores/annotations into grading
   leakage. Missing projected fields are hard per-record errors (same rule as
   unknown placeholders).
+- **Framing is part of the instrument; give it a first-class channel.**
+  `context` composes a constant preamble into every state — prepended to
+  strings/arrays, added as the reserved `$context` key on objects (a source
+  field of that name is a hard error, never a silent shadow). Feedback round
+  5: losing a ~40-word preamble moved 56% of verdicts — "silently different
+  model input" is the worst failure mode a scoring pipeline has, so every
+  run summary carries `inputHash` (state composition + questions; provider,
+  policy, per-record state excluded) and docs tell users to diff it before
+  comparing runs.
 - **Errors are semantic answers' siblings**: per-record OK/ERROR in runs; a
   backend error never corrupts other records. When 6 failures share the same
   signature (digits masked), the run bails out early and the rest are marked
@@ -119,8 +128,9 @@ round-trip returns answers, verdicts, provider cost, and cache hits.
   (Oct 2026): noul answers are `{type, noul}` only. `|2*pTrue - 1|` measures
   *extremity*, not reliability (0.49 and 0.51 both score ~0.02; a
   confidently-wrong 0.9 scores high) — docs must never recommend it as an
-  uncertainty gate. The honest plugin-side gate is the REVIEW band around
-  0.5, or a score question (which does carry confidence).
+  uncertainty gate. The honest plugin-side gates are the REVIEW band around
+  0.5 and two-level score questions (score answers carry a real confidence
+  value; two levels make them a drop-in noul alternative).
 - Run results persist in chunks (`runs/<id>/p/<page>`, summary written last);
   page order is reassembled numerically, never trusted from scan order.
 

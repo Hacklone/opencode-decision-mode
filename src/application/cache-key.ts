@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { DecisionInputError } from "../domain/decision-types"
+import { DecisionInputError, type Question } from "../domain/decision-types"
 import type { CacheFingerprint } from "../ports/cache"
 
 /**
@@ -48,6 +48,34 @@ function canonical(value: unknown, depth: number): string {
 export function cacheKeyFor(fingerprint: CacheFingerprint): string {
   const canonical = canonicalize(fingerprint)
   return `v${fingerprint.schemaVersion}:${sha256(canonical)}`
+}
+
+/**
+ * Fingerprint of the measurement instrument: the state composition (raw
+ * template, projected fields, context preamble) plus the questions. Unlike
+ * the cache key it excludes provider and model, so the same instrument run
+ * through different providers shares a fingerprint — and a changed preamble
+ * or question set is detectable by diffing run summaries instead of
+ * discovering it in shifted verdicts (feedback round 5: a ~40-word preamble
+ * change moved 56% of decisions). Policy is deliberately excluded: verdicts
+ * are derived data, re-derivable at query time.
+ */
+export function inputHashFor(instrument: {
+  state?: unknown
+  project?: readonly string[]
+  context?: string
+  questions: readonly Question[]
+}): string {
+  return sha256(
+    canonicalize({
+      state: instrument.state,
+      // Field order does not affect the projected state (canonicalize sorts
+      // keys), so the fingerprint must not depend on it either.
+      project: instrument.project === undefined ? undefined : [...instrument.project].sort(),
+      context: instrument.context,
+      questions: instrument.questions,
+    }),
+  )
 }
 
 export function sha256(content: string): string {

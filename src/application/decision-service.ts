@@ -11,9 +11,12 @@ import { applyVerdicts } from "../domain/verdict"
 import { BackendError, type BackendRegistry } from "../ports/decision-backend"
 import { CACHE_SCHEMA_VERSION, type DecisionCache } from "../ports/cache"
 import { cacheKeyFor } from "./cache-key"
+import { composeContext } from "./projection"
 
 export interface DecisionRequest {
   state: string | object | unknown[]
+  /** Constant framing preamble, composed into the state (see composeContext). */
+  context?: string
   questions: Question[]
   policy?: PolicySpec
   provider: ProviderId
@@ -46,10 +49,12 @@ export class DecisionService {
   ) {}
 
   async decide(request: DecisionRequest): Promise<DecisionOutcome> {
+    const state =
+      request.context === undefined ? request.state : composeContext(request.context, request.state)
     const key = cacheKeyFor({
       provider: request.provider,
       model: request.model,
-      state: request.state,
+      state,
       questions: request.questions,
       schemaVersion: CACHE_SCHEMA_VERSION,
     })
@@ -71,7 +76,7 @@ export class DecisionService {
         throw backendUnavailable(request.provider)
       }
       const response = await backend.decide({
-        state: request.state,
+        state: state as string | object | unknown[],
         questions: request.questions,
         model: request.model,
         signal: request.signal,

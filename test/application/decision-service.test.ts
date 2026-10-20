@@ -110,4 +110,24 @@ describe("DecisionService", () => {
     expect(after.cacheHit).toBe(true)
     expect(b.decide).toHaveBeenCalledTimes(2)
   })
+
+  it("composes the context preamble into the state before caching and calling", async () => {
+    const b = backend({ b: { type: "noul", pTrue: 0.2 } })
+    const service = new DecisionService(registry(b), new StorageCache(new MemoryKv()))
+    const request = {
+      state: { text: "hi" },
+      context: "Frame.",
+      questions: [noulQuestion],
+      provider: "openrouter" as const,
+      model: "typesafe/jev-1.14",
+      signal,
+    }
+    await service.decide(request)
+    expect(b.decide).toHaveBeenCalledWith(expect.objectContaining({ state: { $context: "Frame.", text: "hi" } }))
+    // The composed state is what the cache keys on: same context hits, a changed context re-calls.
+    const again = await service.decide(request)
+    expect(again.cacheHit).toBe(true)
+    await service.decide({ ...request, context: "Other frame." })
+    expect(b.decide).toHaveBeenCalledTimes(2)
+  })
 })

@@ -8,6 +8,33 @@ import type { SourceRecord } from "../ports/source-reader"
  */
 export const RECORD_SENTINEL = "$record"
 
+/**
+ * Reserved state key carrying the constant framing preamble (the `context`
+ * param): framing is part of the measurement instrument and must compose with
+ * field projection instead of being hacked into CSV columns. The `$` prefix
+ * matches the `$record` sentinel convention; a source field with this name is
+ * a hard error rather than a silent shadow.
+ */
+export const CONTEXT_KEY = "$context"
+
+/**
+ * Place the context preamble first in the state, in whatever container the
+ * state already is: prepended to strings and arrays, added as the reserved
+ * `$context` key on objects. A state that already carries `$context` is a
+ * hard error — silent shadowing would change the model input invisibly.
+ */
+export function composeContext(context: string, state: unknown): unknown {
+  if (typeof state === "string") return `${context}\n\n${state}`
+  if (Array.isArray(state)) return [context, ...state]
+  if (typeof state === "object" && state !== null) {
+    if (CONTEXT_KEY in state) {
+      throw new ProjectionError(`state must not contain the reserved "${CONTEXT_KEY}" key — it carries the context preamble`)
+    }
+    return { [CONTEXT_KEY]: context, ...state }
+  }
+  throw new ProjectionError("context requires a string, object or array state")
+}
+
 const PLACEHOLDER = /\{\{([^{}]*)\}\}/g
 
 export class ProjectionError extends Error {

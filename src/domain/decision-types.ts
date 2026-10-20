@@ -373,6 +373,14 @@ export interface RunSummary {
   createdAt: string
   source: RunSourceInfo
   /**
+   * Fingerprint of the measurement instrument: state composition (template /
+   * projected fields / context preamble) plus the questions — provider,
+   * policy and per-record state excluded. Diff inputHash across run summaries
+   * to detect an accidentally changed preamble or question set before
+   * comparing verdicts. Absent on legacy summaries stored before it existed.
+   */
+  inputHash?: string
+  /**
    * Score-question level labels, stored once per run instead of repeated in
    * every row's answers — a 200-character level string otherwise duplicates
    * once per record per question. Stored rows carry `legend: null`; readers

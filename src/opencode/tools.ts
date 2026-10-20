@@ -61,7 +61,7 @@ const QUESTION_SCHEMA = {
       type: "object",
       properties: {
         id: { type: "string", description: "Stable key used in results" },
-        type: { const: "noul", description: "Boolean judgment; answer is the probability of true (pTrue). Phrase so TRUE is the violation/bad outcome — verdicts escalate with pTrue (p>=failAt → FAIL). Noul answers carry no confidence value on the provider wire. pTrue near 0.5 means the judgment is uncertain: gate that by lowering reviewAt so the REVIEW band covers the middle, or use a score question when you need a real confidence value. |2*pTrue - 1| measures extremity, not reliability." },
+        type: { const: "noul", description: "Boolean judgment; answer is the probability of true (pTrue). Phrase so TRUE is the violation/bad outcome — verdicts escalate with pTrue (p>=failAt → FAIL). Noul answers carry no confidence value on the provider wire. pTrue near 0.5 means the judgment is uncertain: gate that by lowering reviewAt so the REVIEW band covers the middle. When you need a real confidence value for a binary gate, use a two-level score question instead — score answers carry confidence. |2*pTrue - 1| measures extremity, not reliability." },
         instructions: { description: "What to judge; string or structured object" },
         criteria: {
           type: "object",
@@ -128,7 +128,14 @@ const CACHE_SCHEMA = {
   type: "string",
   enum: ["bypass"],
   description:
-    "Skip the cache read so identical inputs are re-sampled (variance/repeatability studies); the fresh answer is written back to the cache.",
+    "Skip the cache read so identical inputs are re-sampled (variance/repeatability studies); the fresh answer is written back to the cache, overwriting the previous sample — archive the earlier run's jsonl export first if you need both generations.",
+} as const
+
+const CONTEXT_SCHEMA = {
+  type: "string",
+  minLength: 1,
+  description:
+    "Constant framing preamble (task framing, audience, scale definitions) composed into the state: prepended to string states, added as the reserved $context key to object states (including projected fields), prepended as the first element to array states. Use it for framing that is part of the measurement instrument — do not bend it into per-record fields.",
 } as const
 
 const OUTPUT_SCHEMA = {
@@ -163,7 +170,7 @@ function decisionTool(deps: ToolDeps): ToolDefinition {
   return {
     name: "decision",
     description:
-      "Delegate judgments about ONE item to the decision runtime (Jev / gpt-6-luna). Pass state and questions (noul/choice/score); get typed answers, probabilities, verdicts (PASS/REVIEW/FAIL) and token cost. Use for boolean checks, classifications, scoring. Phrase boolean (noul) questions so TRUE is the bad outcome — verdicts escalate with pTrue. `cache: \"bypass\"` re-samples an identical request instead of serving the cached answer. You stay the controller: plan and interpret — do not judge the item yourself.",
+      "Delegate judgments about ONE item to the decision runtime (Jev / gpt-6-luna). Pass state and questions (noul/choice/score); get typed answers, probabilities, verdicts (PASS/REVIEW/FAIL) and token cost. Use for boolean checks, classifications, scoring. Phrase boolean (noul) questions so TRUE is the bad outcome — verdicts escalate with pTrue. `context` adds a constant framing preamble to the state without touching your state value. `cache: \"bypass\"` re-samples an identical request instead of serving the cached answer. You stay the controller: plan and interpret — do not judge the item yourself.",
     inputSchema: {
       type: "object",
       properties: {
@@ -175,6 +182,7 @@ function decisionTool(deps: ToolDeps): ToolDefinition {
         questions: { type: "array", minItems: 1, items: QUESTION_SCHEMA, description: "Ask one narrow judgment per question; independent questions run in parallel in one request." },
         policy: POLICY_SCHEMA,
         cache: CACHE_SCHEMA,
+        context: CONTEXT_SCHEMA,
         ...targetSchema(),
       },
       required: ["state", "questions"],
@@ -183,9 +191,11 @@ function decisionTool(deps: ToolDeps): ToolDefinition {
       const questions = parseQuestions(input["questions"])
       const policy = input["policy"] === undefined ? undefined : parsePolicySpec(input["policy"])
       const cache = parseCache(input["cache"])
+      const framing = parseContext(input["context"])
       const { provider, model } = resolveTarget(deps, input)
       const outcome = await deps.decision.decide({
         state: input["state"] as string | object | unknown[],
+        context: framing,
         questions,
         policy,
         provider,
@@ -214,7 +224,7 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
   return {
     name: "decision_map",
     description:
-      "Decide every record in a CSV/JSONL file via the decision runtime. Give a source path, a state projection (`project: [fields]` — the safe default) or a state template ({{field}} placeholders; \"$record\" = whole row, a leakage footgun when the file carries prior scores) and questions; get a run id, summary (verdict tallies, cost, cache hits) and a preview. CSV parsing handles quoted fields, escaped quotes and embedded newlines — judge the original file, no pre-conversion. Results stay server-side; set `output` to write the FULL result set to a file in this call (token-cheap), or fetch slices with decision_results. On large runs set `preview: false` — the response then carries the summary only. `cache: \"bypass\"` re-samples identical inputs for variance studies. Phrase boolean (noul) questions so TRUE is the violation/bad outcome — verdicts escalate with pTrue. Set source.sample to peek at records without judging.",
+      "Decide every record in a CSV/JSONL file via the decision runtime. Give a source path, a state projection (`project: [fields]` — the safe default) or a state template ({{field}} placeholders; \"$record\" = whole row, a leakage footgun when the file carries prior scores) and questions; get a run id, summary (verdict tallies, cost, cache hits) and a preview. Constant framing (task setup, audience, scale definitions) belongs in `context` — it composes with both `project` and a state template instead of being bent into per-record fields; the summary's inputHash fingerprints the instrument, so diff it across runs to catch an accidentally changed preamble. CSV parsing handles quoted fields, escaped quotes and embedded newlines — judge the original file, no pre-conversion. Results stay server-side; set `output` to write the FULL result set to a file in this call (token-cheap), or fetch slices with decision_results. On large runs set `preview: false` — the response then carries the summary only. `cache: \"bypass\"` re-samples identical inputs for variance studies. Phrase boolean (noul) questions so TRUE is the violation/bad outcome — verdicts escalate with pTrue. Set source.sample to peek at records without judging.",
     inputSchema: {
       type: "object",
       properties: {
@@ -244,8 +254,9 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
           items: { type: "string" },
           minItems: 1,
           description:
-            "Project the named record fields as the state object with raw values (types preserved, unlike string templates). The safe default over \"$record\": state contains exactly the fields you name, so prior scores or editorial columns cannot leak into the judgment.",
+            "Project the named record fields as the state object with raw values (types preserved, unlike string templates). The safe default over \"$record\": state contains exactly the fields you name, so prior scores or editorial columns cannot leak into the judgment. Compose constant framing with `context` — projection replaces the state template, so framing must not live in the template.",
         },
+        context: CONTEXT_SCHEMA,
         questions: { type: "array", minItems: 1, items: QUESTION_SCHEMA },
         policy: POLICY_SCHEMA,
         concurrency: { type: "integer", minimum: 1, maximum: 32, description: "Parallel provider requests (default 4)" },
@@ -285,6 +296,7 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
       const policy = input["policy"] === undefined ? undefined : parsePolicySpec(input["policy"])
       const preview = parsePreview(input["preview"])
       const cache = parseCache(input["cache"])
+      const framing = parseContext(input["context"])
       // Validate the destination BEFORE spending provider calls on the run.
       const output = parseOutput(input["output"])
       const { provider, model } = resolveTarget(deps, input)
@@ -297,6 +309,7 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
         format,
         state,
         project,
+        context: framing,
         questions,
         policy,
         provider,
@@ -343,7 +356,7 @@ function decisionResultsTool(deps: ToolDeps): ToolDefinition {
   return {
     name: "decision_results",
     description:
-      "Inspect decision_map runs. Omit `run` (or set list:true) to list recent runs; otherwise fetch filtered, paginated records (status ok/error, verdict PASS/REVIEW/FAIL). detail \"compact\" keeps decisions only; \"full\" adds distributions, usage, errors verbatim, and the record's own fields (snapshot taken at run time) so failing records can be reported without re-reading the source file. Each row's `key` echoes the source record's id/key/_id field (null when absent) and `index` is its 0-based position in the source — ids are not row numbers. Pass `policy` to re-derive verdicts from the stored answers under a different policy — policy iteration without re-running the provider; the verdict filter then applies to the re-derived verdicts (the stored summary still reflects the original run). Raw answers are the stable artifact. Set `output` to write the full filtered result set to a file and get back {path, records, bytes, sha256} only — the token-cheap way to hand results to code, and the checksum lets you prove a derived file matches the run.",
+      "Inspect decision_map runs. Omit `run` (or set list:true) to list recent runs; otherwise fetch filtered, paginated records (status ok/error, verdict PASS/REVIEW/FAIL). detail \"compact\" keeps decisions only; \"full\" adds distributions, usage, errors verbatim, and the record's own fields (snapshot taken at run time) so failing records can be reported without re-reading the source file. Each row's `key` echoes the source record's id/key/_id field (null when absent) and `index` is its 0-based position in the source — ids are not row numbers. Pass `policy` to re-derive verdicts from the stored answers under a different policy — policy iteration without re-running the provider; the verdict filter then applies to the re-derived verdicts (the stored summary still reflects the original run). Raw answers are the stable artifact. Before comparing two runs, diff their summaries' inputHash — it fingerprints the state composition and questions, so a changed preamble or question set shows up there instead of as silently shifted verdicts. Set `output` to write the full filtered result set to a file and get back {path, records, bytes, sha256} only — the token-cheap way to hand results to code, and the checksum lets you prove a derived file matches the run.",
     inputSchema: {
       type: "object",
       properties: {
@@ -455,6 +468,12 @@ function parseCache(value: unknown): "bypass" | undefined {
   if (value === undefined) return undefined
   if (value === "bypass") return "bypass"
   throw new Error('cache must be "bypass"')
+}
+
+function parseContext(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value === "string" && value.length > 0) return value
+  throw new Error("context must be a non-empty string")
 }
 
 /**

@@ -412,6 +412,40 @@ describe("progress reporting", () => {
   })
 })
 
+describe("framing context and input fingerprint", () => {
+  it("composes context into projected state as the reserved $context key", async () => {
+    const rows = [{ index: 0, key: "a", fields: { index: 0, text: "hi" } }]
+    const { bulk, backend } = service({ rows })
+    await bulk.map({ ...baseRequest, state: undefined, project: ["text"], context: "Rate for a comedy app." })
+    expect(backend.decide).toHaveBeenCalledWith(
+      expect.objectContaining({ state: { $context: "Rate for a comedy app.", text: "hi" } }),
+    )
+  })
+
+  it("prepends context to string-template state", async () => {
+    const rows = [{ index: 0, key: null, fields: { index: 0, text: "hi" } }]
+    const { bulk, backend } = service({ rows })
+    await bulk.map({ ...baseRequest, state: "Row: {{text}}", context: "Frame." })
+    expect(backend.decide).toHaveBeenCalledWith(
+      expect.objectContaining({ state: "Frame.\n\nRow: hi" }),
+    )
+  })
+
+  it("fingerprints the instrument in summary.inputHash: stable, context-sensitive", async () => {
+    const { bulk } = service({ rows: records(1) })
+    const first = await bulk.map({ ...baseRequest, state: undefined, project: ["text"] })
+    const second = await bulk.map({ ...baseRequest, state: undefined, project: ["text"] })
+    expect(second.summary.inputHash).toBe(first.summary.inputHash)
+    const reframed = await bulk.map({
+      ...baseRequest,
+      state: undefined,
+      project: ["text"],
+      context: "Frame.",
+    })
+    expect(reframed.summary.inputHash).not.toBe(first.summary.inputHash)
+  })
+})
+
 describe("chunkResults", () => {
   it("chunks in RUN_PAGE_SIZE pages, empty-safe", () => {
     expect(chunkResults([])).toEqual([])

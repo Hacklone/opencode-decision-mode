@@ -155,6 +155,45 @@ describe("decision_map tool", () => {
     expect(backend.decide).toHaveBeenCalledWith(expect.objectContaining({ state: { text: "hi" } }))
   })
 
+  it("composes context into projected state and fingerprints the instrument", async () => {
+    const { deps, backend } = await decisionDeps()
+    const map = buildTools(deps)[1]!
+    const output = JSON.parse(
+      (
+        await map.execute(
+          { source: { path: "data.csv" }, project: ["text"], context: "Rate for a comedy app.", questions: [question] },
+          context,
+        )
+      ).content,
+    )
+    expect(backend.decide).toHaveBeenCalledWith(
+      expect.objectContaining({ state: { $context: "Rate for a comedy app.", text: "hi" } }),
+    )
+    expect(typeof output.summary.inputHash).toBe("string")
+  })
+
+  it("prepends context to string states on the single decision tool", async () => {
+    const { deps, backend } = await decisionDeps()
+    const decision = buildTools(deps)[0]!
+    await decision.execute({ state: "x", context: "Frame.", questions: [question] }, context)
+    expect(backend.decide).toHaveBeenCalledWith(expect.objectContaining({ state: "Frame.\n\nx" }))
+  })
+
+  it("rejects a non-string or empty context", async () => {
+    const { deps } = await decisionDeps()
+    const [decision, map] = buildTools(deps)
+    if (decision === undefined || map === undefined) throw new Error("tools missing")
+    await expect(decision.execute({ state: "x", context: 42, questions: [question] }, context)).rejects.toThrow(
+      /context must be a non-empty string/,
+    )
+    await expect(decision.execute({ state: "x", context: "", questions: [question] }, context)).rejects.toThrow(
+      /context must be a non-empty string/,
+    )
+    await expect(
+      map.execute({ source: { path: "d.csv" }, project: ["text"], context: 7, questions: [question] }, context),
+    ).rejects.toThrow(/context must be a non-empty string/)
+  })
+
   it("validates project and its exclusivity with state", async () => {
     const { deps } = await decisionDeps()
     const map = buildTools(deps)[1]!

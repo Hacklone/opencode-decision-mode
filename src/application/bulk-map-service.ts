@@ -16,8 +16,8 @@ import { CACHE_SCHEMA_VERSION, type DecisionCache } from "../ports/cache"
 import { RUN_PAGE_SIZE, type RunStore, type StoredRunPage } from "../ports/run-store"
 import type { SourceReader, SourceRecord } from "../ports/source-reader"
 import { newRunId } from "./ids"
-import { projectRecord, projectState } from "./projection"
-import { cacheKeyFor } from "./cache-key"
+import { composeContext, projectRecord, projectState } from "./projection"
+import { cacheKeyFor, inputHashFor } from "./cache-key"
 
 export interface MapRequest {
   /** Path to the source file (.csv/.tsv/.jsonl/.ndjson); resolved by the caller. */
@@ -27,6 +27,8 @@ export interface MapRequest {
   state: unknown
   /** Raw-typed field projection: state becomes {name: value} for the named fields. */
   project?: string[]
+  /** Constant framing preamble, composed into every record's state (see composeContext). */
+  context?: string
   questions: Question[]
   policy?: PolicySpec
   provider: ProviderId
@@ -191,6 +193,12 @@ export class BulkMapService {
       durationMs: Math.max(0, this.now() - startedAt),
       createdAt: new Date(this.now()).toISOString(),
       source: { path: request.path, format: request.format, totalRecords: allRecords.length },
+      inputHash: inputHashFor({
+        state: request.state,
+        project: request.project,
+        context: request.context,
+        questions: request.questions,
+      }),
       ...(Object.keys(levels).length > 0 ? { levels } : {}),
     }
 
@@ -218,10 +226,12 @@ export class BulkMapService {
     backend: NonNullable<BackendRegistry[ProviderId]>,
   ): Promise<{ result: RecordResult; resolvedModel: string | undefined }> {
     try {
-      const state =
+      const projected =
         request.project !== undefined
           ? projectRecord(request.project, record)
           : projectState(request.state, record)
+      const state =
+        request.context === undefined ? projected : composeContext(request.context, projected)
       const key = cacheKeyFor({
         provider: request.provider,
         model: request.model,

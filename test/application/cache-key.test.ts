@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { cacheKeyFor, canonicalize, sha256 } from "../../src/application/cache-key"
+import { cacheKeyFor, canonicalize, inputHashFor, sha256 } from "../../src/application/cache-key"
 import { DecisionInputError } from "../../src/domain/decision-types"
 
 describe("canonicalize", () => {
@@ -73,5 +73,35 @@ describe("cacheKeyFor", () => {
       questions: [],
       schemaVersion: 7,
     }))}`)
+  })
+})
+
+describe("inputHashFor", () => {
+  const questions = [{ id: "q", type: "noul" as const, instructions: "x" }]
+
+  it("is stable for the same instrument", () => {
+    expect(inputHashFor({ state: "t", questions })).toBe(inputHashFor({ state: "t", questions }))
+  })
+
+  it("ignores projected-field order (it does not affect the state)", () => {
+    expect(inputHashFor({ project: ["b", "a"], questions })).toBe(
+      inputHashFor({ project: ["a", "b"], questions }),
+    )
+  })
+
+  it("changes with the state composition, context and questions", () => {
+    const base = inputHashFor({ state: "t", questions })
+    for (const variant of [
+      inputHashFor({ state: "t2", questions }),
+      inputHashFor({ project: ["a"], questions }),
+      inputHashFor({ state: "t", context: "Frame.", questions }),
+      inputHashFor({ state: "t", questions: [{ id: "q", type: "noul", instructions: "y" }] }),
+    ]) {
+      expect(variant).not.toBe(base)
+    }
+  })
+
+  it("covers the undefined vs absent distinction the same way canonicalize does", () => {
+    expect(inputHashFor({ questions })).toBe(inputHashFor({ state: undefined, questions }))
   })
 })
