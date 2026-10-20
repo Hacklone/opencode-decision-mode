@@ -1,11 +1,19 @@
-import type { Answer, RecordResult, RunSummary, Verdict } from "../domain/decision-types"
+import type { Answer, PolicySpec, RecordResult, RunSummary, Verdict } from "../domain/decision-types"
 import type { RecordStatus } from "../domain/decision-types"
+import { policyFor } from "../domain/decision-types"
+import { rederiveVerdicts } from "../domain/verdict"
 import type { RunStore } from "../ports/run-store"
 
 export interface ResultQuery {
   run: string
   status?: RecordStatus
   verdict?: Verdict
+  /**
+   * When set, verdicts are re-derived from the stored answers under this
+   * policy instead of the run-time one — policy iteration without re-running
+   * the provider. The verdict filter applies to the re-derived verdicts.
+   */
+  policy?: PolicySpec
   /** "compact" trims probabilities/legend/usage for token efficiency; "full" keeps everything. */
   detail?: "compact" | "full"
   offset?: number
@@ -40,10 +48,14 @@ export class ResultQueryService {
     if (summary === null) {
       throw new Error(`unknown run ${JSON.stringify(request.run)}`)
     }
-    const all = await this.store.getResults(request.run)
-    if (all === null) {
+    const stored = await this.store.getResults(request.run)
+    if (stored === null) {
       throw new Error(`run ${JSON.stringify(request.run)} is missing its results`)
     }
+    const all =
+      request.policy !== undefined
+        ? rederiveVerdicts(stored, (id) => policyFor(request.policy, id))
+        : stored
 
     const filtered = all.filter((record) => {
       if (request.status !== undefined && record.status !== request.status) return false

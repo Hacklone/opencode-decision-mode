@@ -120,4 +120,30 @@ describe("ResultQueryService", () => {
     expect((await service.query({ run: summary.id, limit: 0 })).results).toHaveLength(3)
     expect((await service.query({ run: summary.id, limit: 500 })).results).toHaveLength(3)
   })
+
+  it("re-derives verdicts from stored answers under a new policy", async () => {
+    const service = new ResultQueryService(store(rows))
+    // Stored: b=0.9 → FAIL under {failAt: 0.85}. Loosen the policy: PASS.
+    const page = await service.query({ run: summary.id, policy: { reviewAt: 0.95, failAt: 0.99 } })
+    expect(page.results[0]!.verdicts).toEqual({ b: "PASS" })
+    expect(page.results[0]!.verdict).toBe("PASS")
+    // The stored summary still reflects the original run.
+    expect(page.summary).toEqual(summary)
+  })
+
+  it("applies the verdict filter to re-derived verdicts", async () => {
+    const service = new ResultQueryService(store(rows))
+    // Both ok rows have b=0.9. Stored verdicts differ (FAIL, PASS) but under
+    // {reviewAt: 0.8, failAt: 0.99} both re-derive to REVIEW.
+    const page = await service.query({ run: summary.id, verdict: "FAIL", policy: { reviewAt: 0.8, failAt: 0.99 } })
+    expect(page.matched).toBe(0)
+    const reviews = await service.query({ run: summary.id, verdict: "REVIEW", policy: { reviewAt: 0.8, failAt: 0.99 } })
+    expect(reviews.matched).toBe(2)
+  })
+
+  it("re-derivation leaves error rows untouched", async () => {
+    const service = new ResultQueryService(store(rows))
+    const page = await service.query({ run: summary.id, status: "error", policy: { reviewAt: 0.1, failAt: 0.2 } })
+    expect(page.results[0]).toEqual({ index: 1, key: null, status: "error", error: "boom" })
+  })
 })

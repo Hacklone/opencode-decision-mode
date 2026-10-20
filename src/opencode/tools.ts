@@ -56,7 +56,7 @@ const QUESTION_SCHEMA = {
       type: "object",
       properties: {
         id: { type: "string", description: "Stable key used in results" },
-        type: { const: "noul", description: "Boolean judgment; answer is the probability of true. Phrase so TRUE is the violation/bad outcome — verdicts escalate with pTrue (p>=failAt → FAIL)." },
+        type: { const: "noul", description: "Boolean judgment; answer is the probability of true (pTrue). Phrase so TRUE is the violation/bad outcome — verdicts escalate with pTrue (p>=failAt → FAIL). noul answers carry no confidence value (provider limitation); when you need a confidence-like signal for gating, use |2*pTrue - 1|." },
         instructions: { description: "What to judge; string or structured object" },
         criteria: {
           type: "object",
@@ -84,14 +84,14 @@ const QUESTION_SCHEMA = {
       type: "object",
       properties: {
         id: { type: "string" },
-        type: { const: "score", description: "Degree along ordered levels; answer is a probability-weighted position (0-based, may be fractional) plus the nearest level label" },
+        type: { const: "score", description: "Degree along ordered levels; answer is a probability-weighted position in [0, levels-1] (0-based, may be fractional, clamped) plus the nearest level label" },
         instructions: {},
         criteria: {
           type: "array",
           items: { type: "string" },
           minItems: 2,
           maxItems: 10,
-          description: "Level descriptions, lowest → highest",
+          description: "Level descriptions, lowest → highest. Plain strings only — the provider wire format does not accept structured {what, examples} objects. Sharper, concrete level descriptions measurably improve answers.",
         },
       },
       required: ["id", "type", "instructions", "criteria"],
@@ -199,7 +199,7 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
   return {
     name: "decision_map",
     description:
-      "Decide every record in a CSV/JSONL file via the decision runtime. Give a source path, a state template ({{field}} placeholders, or \"$record\" for the whole row) and questions; get a run id, summary (verdict tallies, cost, cache hits) and a preview. CSV parsing handles quoted fields, escaped quotes and embedded newlines — judge the original file, no pre-conversion. Results stay server-side; set `output` to write the FULL result set to a file in this call (token-cheap), or fetch slices with decision_results. Phrase boolean (noul) questions so TRUE is the violation/bad outcome — verdicts escalate with pTrue. Set source.sample to peek at records without judging.",
+      "Decide every record in a CSV/JSONL file via the decision runtime. Give a source path, a state projection (`project: [fields]` — the safe default) or a state template ({{field}} placeholders; \"$record\" = whole row, a leakage footgun when the file carries prior scores) and questions; get a run id, summary (verdict tallies, cost, cache hits) and a preview. CSV parsing handles quoted fields, escaped quotes and embedded newlines — judge the original file, no pre-conversion. Results stay server-side; set `output` to write the FULL result set to a file in this call (token-cheap), or fetch slices with decision_results. Phrase boolean (noul) questions so TRUE is the violation/bad outcome — verdicts escalate with pTrue. Set source.sample to peek at records without judging.",
     inputSchema: {
       type: "object",
       properties: {
@@ -222,7 +222,14 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
         },
         state: {
           description:
-            'State template projected per record: strings interpolate {{field}} / {{a.b}} placeholders; the literal value "$record" uses the whole row. Required unless source.sample is set.',
+            'State template projected per record: strings interpolate {{field}} / {{a.b}} placeholders; the literal value "$record" uses the whole row. Prefer `project` instead when you just need a few fields — "$record" sends the entire row, including prior scores or annotations, which leaks the answer into the judgment. Required unless source.sample or project is set.',
+        },
+        project: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          description:
+            "Project the named record fields as the state object with raw values (types preserved, unlike string templates). The safe default over \"$record\": state contains exactly the fields you name, so prior scores or editorial columns cannot leak into the judgment.",
         },
         questions: { type: "array", minItems: 1, items: QUESTION_SCHEMA },
         policy: POLICY_SCHEMA,
@@ -246,7 +253,13 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
         return { content: JSON.stringify({ path, format, sampled: records.length, records }) }
       }
 
-      if (input["state"] === undefined) throw new Error("state is required")
+      const project = parseProject(input["project"])
+      if (project !== undefined && input["state"] !== undefined) {
+        throw new Error("state and project are mutually exclusive — pass one")
+      }
+      if (input["state"] === undefined && project === undefined) {
+        throw new Error("state or project is required")
+      }
       const questions = parseQuestions(input["questions"])
       const policy = input["policy"] === undefined ? undefined : parsePolicySpec(input["policy"])
       // Validate the destination BEFORE spending provider calls on the run.
@@ -260,6 +273,7 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
         path,
         format,
         state,
+        project,
         questions,
         policy,
         provider,
@@ -301,7 +315,7 @@ function decisionResultsTool(deps: ToolDeps): ToolDefinition {
   return {
     name: "decision_results",
     description:
-      "Inspect decision_map runs. Omit `run` (or set list:true) to list recent runs; otherwise fetch filtered, paginated records (status ok/error, verdict PASS/REVIEW/FAIL). detail \"compact\" keeps decisions only; \"full\" adds distributions, usage, errors verbatim, and the record's own fields (snapshot taken at run time) so failing records can be reported without re-reading the source file. Each row's `key` echoes the source record's id/key/_id field (null when absent) and `index` is its 0-based position in the source — ids are not row numbers. Set `output` to write the full filtered result set to a file and get back {path, records, bytes, sha256} only — the token-cheap way to hand results to code, and the checksum lets you prove a derived file matches the run.",
+      "Inspect decision_map runs. Omit `run` (or set list:true) to list recent runs; otherwise fetch filtered, paginated records (status ok/error, verdict PASS/REVIEW/FAIL). detail \"compact\" keeps decisions only; \"full\" adds distributions, usage, errors verbatim, and the record's own fields (snapshot taken at run time) so failing records can be reported without re-reading the source file. Each row's `key` echoes the source record's id/key/_id field (null when absent) and `index` is its 0-based position in the source — ids are not row numbers. Pass `policy` to re-derive verdicts from the stored answers under a different policy — policy iteration without re-running the provider; the verdict filter then applies to the re-derived verdicts (the stored summary still reflects the original run). Raw answers are the stable artifact. Set `output` to write the full filtered result set to a file and get back {path, records, bytes, sha256} only — the token-cheap way to hand results to code, and the checksum lets you prove a derived file matches the run.",
     inputSchema: {
       type: "object",
       properties: {
@@ -309,6 +323,11 @@ function decisionResultsTool(deps: ToolDeps): ToolDefinition {
         list: { type: "boolean", description: "List recent runs instead of querying one" },
         status: { type: "string", enum: ["ok", "error"] },
         verdict: { type: "string", enum: ["PASS", "REVIEW", "FAIL"] },
+        policy: {
+          ...POLICY_SCHEMA,
+          description:
+            "Re-derive verdicts from the stored answers under this policy instead of the run-time one. Iterate on thresholds without spending provider calls; the verdict filter applies to the re-derived verdicts.",
+        },
         detail: { type: "string", enum: ["compact", "full"] },
         offset: { type: "integer", minimum: 0 },
         limit: { type: "integer", minimum: 1, maximum: 200, description: "Default 20" },
@@ -328,15 +347,17 @@ function decisionResultsTool(deps: ToolDeps): ToolDefinition {
       if (verdict !== undefined && verdict !== "PASS" && verdict !== "REVIEW" && verdict !== "FAIL") {
         throw new Error('verdict must be "PASS", "REVIEW" or "FAIL"')
       }
+      const policy = input["policy"] === undefined ? undefined : parsePolicySpec(input["policy"])
       const output = parseOutput(input["output"])
       if (output !== undefined) {
-        const meta = await deps.exporter.export({ run, path: output.path, format: output.format, status, verdict })
+        const meta = await deps.exporter.export({ run, path: output.path, format: output.format, status, verdict, policy })
         return { content: JSON.stringify({ export: meta }) }
       }
       const page = await deps.results.query({
         run,
         status,
         verdict,
+        policy,
         detail: input["detail"] === "full" ? "full" : "compact",
         offset: asInteger(input["offset"]),
         limit: asInteger(input["limit"]),
@@ -377,6 +398,19 @@ function parseOutput(value: unknown): { path: string; format: "csv" | "jsonl" } 
     throw new Error("output.path must be a non-empty string")
   }
   return { path, format: resolveFormat(output["format"], path, "output") }
+}
+
+function parseProject(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("project must be a non-empty array of field names")
+  }
+  return value.map((name, i) => {
+    if (typeof name !== "string" || name.length === 0) {
+      throw new Error(`project[${i}] must be a non-empty string`)
+    }
+    return name
+  })
 }
 
 /**

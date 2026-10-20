@@ -82,6 +82,24 @@ const baseRequest = {
 }
 
 describe("BulkMapService", () => {
+  it("projects named fields as raw-typed state", async () => {
+    const rows = [{ index: 0, key: "a", fields: { index: 0, text: "hi", n: 3, tags: ["x"], secret: "leak" } }]
+    const { bulk, backend } = service({ rows })
+    await bulk.map({ ...baseRequest, state: undefined, project: ["text", "n", "tags"] })
+    expect(backend.decide).toHaveBeenCalledWith(expect.objectContaining({ state: { text: "hi", n: 3, tags: ["x"] } }))
+  })
+
+  it("a missing projected field is a per-record error, not silent data loss", async () => {
+    const rows = [
+      { index: 0, key: null, fields: { index: 0, text: "ok" } },
+      { index: 1, key: null, fields: { index: 1 } },
+    ]
+    const { bulk } = service({ rows })
+    const { summary, preview } = await bulk.map({ ...baseRequest, state: undefined, project: ["text"] })
+    expect(summary.error).toBe(1)
+    expect(preview[1]!.error).toMatch(/record 1: projected field "text" does not exist/)
+  })
+
   it("maps every record, tallies verdicts, and persists a chunked run", async () => {
     const { bulk, store } = service({ rows: records(5) })
     const { summary, preview } = await bulk.map({ ...baseRequest })

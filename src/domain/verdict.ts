@@ -1,4 +1,4 @@
-import type { Answer, Verdict, VerdictPolicy } from "./decision-types"
+import type { Answer, RecordResult, Verdict, VerdictPolicy } from "./decision-types"
 
 /**
  * Deterministic verdict policy for boolean (noul) answers.
@@ -52,4 +52,21 @@ export function applyVerdicts(
     }
   }
   return { verdicts, verdict: worstVerdict(Object.values(verdicts)) }
+}
+
+/**
+ * Policy iteration primitive: verdicts are derived data, not provider output —
+ * recompute them from the stored answers under a new policy without re-running
+ * the provider. Ok rows get fresh verdicts (empty when the run had no noul
+ * questions, mirroring okResult); error rows have no answers and pass through.
+ */
+export function rederiveVerdicts(
+  records: readonly RecordResult[],
+  policyForQuestion: (questionId: string) => VerdictPolicy,
+): RecordResult[] {
+  return records.map((record) => {
+    if (record.status !== "ok" || record.answers === undefined) return record
+    const { verdicts, verdict } = applyVerdicts(record.answers, policyForQuestion)
+    return { ...record, verdicts, verdict }
+  })
 }

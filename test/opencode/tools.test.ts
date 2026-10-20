@@ -140,6 +140,41 @@ describe("decision tool", () => {
 })
 
 describe("decision_map tool", () => {
+  it("projects named fields as the raw-typed state object", async () => {
+    const { deps, backend } = await decisionDeps()
+    const map = buildTools(deps)[1]!
+    const output = JSON.parse(
+      (
+        await map.execute(
+          { source: { path: "data.csv" }, project: ["text"], questions: [question] },
+          context,
+        )
+      ).content,
+    )
+    expect(output.summary.total).toBe(1)
+    expect(backend.decide).toHaveBeenCalledWith(expect.objectContaining({ state: { text: "hi" } }))
+  })
+
+  it("validates project and its exclusivity with state", async () => {
+    const { deps } = await decisionDeps()
+    const map = buildTools(deps)[1]!
+    await expect(
+      map.execute({ source: { path: "d.csv" }, state: "$record", project: ["text"], questions: [question] }, context),
+    ).rejects.toThrow(/state and project are mutually exclusive/)
+    await expect(map.execute({ source: { path: "d.csv" }, questions: [question] }, context)).rejects.toThrow(
+      /state or project is required/,
+    )
+    await expect(
+      map.execute({ source: { path: "d.csv" }, project: "text", questions: [question] }, context),
+    ).rejects.toThrow(/project must be a non-empty array of field names/)
+    await expect(
+      map.execute({ source: { path: "d.csv" }, project: [], questions: [question] }, context),
+    ).rejects.toThrow(/project must be a non-empty array of field names/)
+    await expect(
+      map.execute({ source: { path: "d.csv" }, project: ["text", ""], questions: [question] }, context),
+    ).rejects.toThrow(/project\[1\] must be a non-empty string/)
+  })
+
   it("infers format from the path and returns summary + preview", async () => {
     const { deps } = await decisionDeps()
     const map = buildTools(deps)[1]!
@@ -210,7 +245,7 @@ describe("decision_map tool", () => {
     const { deps } = await decisionDeps()
     const map = buildTools(deps)[1]!
     await expect(map.execute({ source: { path: "x.csv" }, questions: [question] }, context)).rejects.toThrow(
-      /state is required/,
+      /state or project is required/,
     )
   })
 })
@@ -285,6 +320,35 @@ describe("decision_results tool", () => {
     expect(errors.matched).toBe(0)
     await expect(resultsTool.execute({ run: "nope" }, context)).rejects.toThrow(/unknown run/)
   })
+
+  it("re-derives verdicts from stored answers under a new policy", async () => {
+    const { deps } = await decisionDeps()
+    const map = buildTools(deps)[1]!
+    const resultsTool = buildTools(deps)[2]!
+    const run = JSON.parse(
+      (
+        await map.execute(
+          { source: { path: "data.csv" }, state: "$record", questions: [question] },
+          context,
+        )
+      ).content,
+    )
+    // Stored: pTrue 0.95 under default {0.6/0.85} → FAIL. No new provider call.
+    const page = JSON.parse(
+      (await resultsTool.execute({ run: run.run, policy: { reviewAt: 0.97, failAt: 0.99 } }, context)).content,
+    )
+    expect(page.results[0].verdict).toBe("PASS")
+    expect(page.results[0].verdicts).toEqual({ b: "PASS" })
+    // Filter applies to the re-derived verdicts, not the stored ones.
+    const reviews = JSON.parse(
+      (await resultsTool.execute({ run: run.run, verdict: "REVIEW", policy: { reviewAt: 0.9, failAt: 0.99 } }, context))
+        .content,
+    )
+    expect(reviews.matched).toBe(1)
+    await expect(
+      resultsTool.execute({ run: run.run, policy: { reviewAt: 5 } }, context),
+    ).rejects.toThrow(/number in \[0, 1\]/)
+  })
 })
 
 describe("file export", () => {
@@ -351,6 +415,34 @@ describe("file export", () => {
     // Validation happens before any provider spend: no run was created.
     const resultsTool = buildTools(deps)[2]!
     expect(JSON.parse((await resultsTool.execute({}, context)).content).runs).toEqual([])
+  })
+
+  it("export honors policy re-derivation in the verdict columns and filters", async () => {
+    const { deps, files } = await decisionDeps()
+    const map = buildTools(deps)[1]!
+    const resultsTool = buildTools(deps)[2]!
+    const run = JSON.parse(
+      (await map.execute({ source: { path: "data.csv" }, state: "$record", questions: [question] }, context)).content,
+    )
+    const exported = JSON.parse(
+      (
+        await resultsTool.execute(
+          { run: run.run, output: { path: "re.csv" }, policy: { reviewAt: 0.9, failAt: 0.99 } },
+          context,
+        )
+      ).content,
+    )
+    expect(exported.export.records).toBe(1)
+    expect(files.get("re.csv")).toBe("_index,_key,_status,_error,b,b_verdict,text\n0,1,ok,,0.95,REVIEW,hi\n")
+    const none = JSON.parse(
+      (
+        await resultsTool.execute(
+          { run: run.run, verdict: "FAIL", policy: { reviewAt: 0.9, failAt: 0.99 }, output: { path: "fails.csv" } },
+          context,
+        )
+      ).content,
+    )
+    expect(none.export).toMatchObject({ records: 0, total: 1 })
   })
 })
 

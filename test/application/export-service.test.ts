@@ -121,6 +121,24 @@ describe("ResultsExportService", () => {
     expect(errored.records).toBe(1)
   })
 
+  it("re-derives verdicts before filtering when a policy is given", async () => {
+    const { files, service } = memorySink()
+    // Stored verdicts: row 0 FAIL (b=0.91), row 2 PASS (b=0.2). A low policy
+    // makes BOTH rows FAIL — under stored verdicts the FAIL filter would only
+    // match row 0, so matching both proves the filter saw re-derived values.
+    const meta = await service.export({
+      run: summary.id,
+      path: "out/p.jsonl",
+      format: "jsonl",
+      verdict: "FAIL",
+      policy: { reviewAt: 0.1, failAt: 0.15 },
+    })
+    expect(meta.records).toBe(2)
+    const lines = files.get("out/p.jsonl")!.trim().split("\n").map((line) => JSON.parse(line))
+    expect(lines.map((row) => row.key)).toEqual(["a-1", "a-3"])
+    expect(lines[1]!.verdicts).toEqual({ b: "FAIL" })
+  })
+
   it("writes an empty jsonl file and a header-only csv when nothing matches", async () => {
     const { files, service } = memorySink()
     const jsonl = await service.export({ run: summary.id, path: "out/0.jsonl", format: "jsonl", status: "error", verdict: "FAIL" })

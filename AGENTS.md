@@ -86,7 +86,18 @@ round-trip returns answers, verdicts, provider cost, and cache hits.
   multiple records into one call.
 - **Cache** keys are content hashes over {provider, model, state, questions,
   schemaVersion}; only successful responses are cached; verdict policies are
-  applied *after* cache retrieval (policy is not part of the key).
+  applied *after* cache retrieval (policy is not part of the key). This
+  composition is documented user-facing (feedback round 3): cache behavior
+  must be inferable, not discovered by experiment.
+- **Raw answers are the stable artifact; verdicts are derived data.**
+  Policy-only changes must be re-derivable at query time
+  (`decision_results {run, policy}` re-derives from stored answers) — never
+  force a provider re-run for a threshold change.
+- **State projection is the safe default; `$record` is the footgun.**
+  `project: [fields]` sends exactly the named raw-typed fields; `"$record"`
+  sends the whole row and turns prior scores/annotations into grading
+  leakage. Missing projected fields are hard per-record errors (same rule as
+  unknown placeholders).
 - **Errors are semantic answers' siblings**: per-record OK/ERROR in runs; a
   backend error never corrupts other records. When 6 failures share the same
   signature (digits masked), the run bails out early and the rest are marked

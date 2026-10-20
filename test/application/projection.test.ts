@@ -4,6 +4,7 @@ import {
   formatFromPath,
   interpolate,
   lookupPath,
+  projectRecord,
   projectState,
   recordKey,
 } from "../../src/application/projection"
@@ -41,6 +42,29 @@ describe("projectState", () => {
 
   it("skips undefined template values", () => {
     expect(projectState({ a: undefined, b: 1 }, record({}))).toEqual({ b: 1 })
+  })
+})
+
+describe("projectRecord", () => {
+  it("selects named fields with raw types preserved", () => {
+    const r = record({ text: "hi", n: 3, tags: ["a"], flag: false, score: 0.5 }, 4)
+    expect(projectRecord(["text", "n", "tags", "flag", "score"], r)).toEqual({
+      text: "hi",
+      n: 3,
+      tags: ["a"],
+      flag: false,
+      score: 0.5,
+    })
+  })
+
+  it("fails loudly on a missing field, naming the record and the field", () => {
+    expect(() => projectRecord(["text"], record({}, 7))).toThrow(ProjectionError)
+    expect(() => projectRecord(["text"], record({}, 7))).toThrow(/record 7: projected field "text" does not exist/)
+  })
+
+  it("resolves dot paths but keys the output by the name as given", () => {
+    const r = record({ meta: { age: 30 } })
+    expect(projectRecord(["meta.age"], r)).toEqual({ "meta.age": 30 })
   })
 })
 

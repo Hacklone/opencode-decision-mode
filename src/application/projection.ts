@@ -40,6 +40,28 @@ export function projectState(template: unknown, record: SourceRecord): unknown {
   return template
 }
 
+/**
+ * Project the named fields into a raw-typed state object — values keep their
+ * source types, unlike string templates which JSON-encode everything. This is
+ * the safe default for state construction: `$record` passes the whole row and
+ * turns prior scores or annotations into grading leakage. A missing field is
+ * a hard error, mirroring the placeholder rule (no silent data loss).
+ */
+export function projectRecord(
+  names: readonly string[],
+  record: SourceRecord,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const name of names) {
+    const value = lookupPath(record.fields, name)
+    if (value === undefined) {
+      throw new ProjectionError(`record ${record.index}: projected field "${name}" does not exist`)
+    }
+    out[name] = value
+  }
+  return out
+}
+
 export function interpolate(template: string, record: SourceRecord): string {
   return template.replace(PLACEHOLDER, (_match, rawPath: string) => {
     const path = rawPath.trim()

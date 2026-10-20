@@ -1,5 +1,7 @@
 import { sha256 } from "./cache-key"
-import type { Answer, RecordResult, RecordStatus, Verdict } from "../domain/decision-types"
+import type { Answer, PolicySpec, RecordResult, RecordStatus, Verdict } from "../domain/decision-types"
+import { policyFor } from "../domain/decision-types"
+import { rederiveVerdicts } from "../domain/verdict"
 import type { RunStore } from "../ports/run-store"
 import type { FileSink } from "../ports/file-sink"
 
@@ -9,6 +11,8 @@ export interface ExportRequest {
   format: "jsonl" | "csv"
   status?: RecordStatus
   verdict?: Verdict
+  /** Re-derive verdicts from the stored answers under this policy before filtering/writing. */
+  policy?: PolicySpec
 }
 
 export interface ExportMeta {
@@ -41,10 +45,14 @@ export class ResultsExportService {
     if (summary === null) {
       throw new Error(`unknown run ${JSON.stringify(request.run)}`)
     }
-    const all = await this.store.getResults(request.run)
-    if (all === null) {
+    const stored = await this.store.getResults(request.run)
+    if (stored === null) {
       throw new Error(`run ${JSON.stringify(request.run)} is missing its results`)
     }
+    const all =
+      request.policy !== undefined
+        ? rederiveVerdicts(stored, (id) => policyFor(request.policy, id))
+        : stored
 
     const filtered = all.filter((record) => {
       if (request.status !== undefined && record.status !== request.status) return false

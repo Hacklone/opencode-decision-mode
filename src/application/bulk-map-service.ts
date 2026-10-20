@@ -16,14 +16,17 @@ import { CACHE_SCHEMA_VERSION, type DecisionCache } from "../ports/cache"
 import { RUN_PAGE_SIZE, type RunStore, type StoredRunPage } from "../ports/run-store"
 import type { SourceReader, SourceRecord } from "../ports/source-reader"
 import { newRunId } from "./ids"
-import { projectState } from "./projection"
+import { projectRecord, projectState } from "./projection"
 import { cacheKeyFor } from "./cache-key"
 
 export interface MapRequest {
   /** Path to the source file (.csv/.tsv/.jsonl/.ndjson); resolved by the caller. */
   path: string
   format: "csv" | "jsonl"
+  /** State template projected per record. Undefined when `project` selects the fields instead. */
   state: unknown
+  /** Raw-typed field projection: state becomes {name: value} for the named fields. */
+  project?: string[]
   questions: Question[]
   policy?: PolicySpec
   provider: ProviderId
@@ -191,7 +194,10 @@ export class BulkMapService {
     backend: NonNullable<BackendRegistry[ProviderId]>,
   ): Promise<{ result: RecordResult; resolvedModel: string | undefined }> {
     try {
-      const state = projectState(request.state, record)
+      const state =
+        request.project !== undefined
+          ? projectRecord(request.project, record)
+          : projectState(request.state, record)
       const key = cacheKeyFor({
         provider: request.provider,
         model: request.model,

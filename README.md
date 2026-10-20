@@ -50,7 +50,8 @@ probabilities into actionable labels — per call, global, or per question.
 
 - **One record = one request; errors are isolated per record** — one bad row never corrupts a run.
 - **Systematic-failure bail**: 6 failures with the same signature stop the run and skip the rest, instead of burning your whole input on a broken assumption.
-- **Content-hashed cache**: re-run after fixing a question and only what actually changed hits the provider. Free.
+- **Content-hashed cache**: re-run after fixing a question and only what actually changed hits the provider. Free. Cache keys are content hashes over provider, model, state, questions, and a schema version — so you can always tell what a re-run will reuse.
+- **Policy iteration is free**: raw answers are the stable artifact and verdicts are derived data. `decision_results {run, policy}` re-derives PASS/REVIEW/FAIL from stored answers under new thresholds without spending a provider call.
 - **File export** (`jsonl` lossless / `csv` join-ready, keyed by record id + index) so a 10 000-row job never needs to page its results through a context window.
 - **Polarity guardrail**: ask a boolean question without stating your threshold policy and the response warns you about the TRUE-means-bad convention before verdicts silently invert.
 
@@ -78,7 +79,8 @@ provider you want to use.
 // decision_map
 {
   "source": { "path": "tickets.csv", "sample": 3 },        // sample = peek at data shape, no provider calls
-  "state": { "ticket": "{{title}}\n{{body}}" },
+  "project": ["title", "body"],        // state = exactly these fields, raw values — safer than "$record",
+                                       // which sends the whole row (prior scores = grading leakage)
   "questions": [
     { "id": "duplicate", "type": "noul", "instructions": "TRUE if this ticket duplicates an existing one" }
   ],
