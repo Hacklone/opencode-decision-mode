@@ -11,6 +11,7 @@ import {
   parseQuestion,
   parseQuestions,
   policyFor,
+  legendFor,
 } from "../../src/domain/decision-types"
 
 describe("parseQuestion", () => {
@@ -132,5 +133,31 @@ describe("type guards", () => {
     expect(isQuestionType("score")).toBe(true)
     expect(isQuestionType("noul")).toBe(true)
     expect(isQuestionType("predicate")).toBe(false)
+  })
+})
+
+describe("legendFor", () => {
+  const levels = { s: ["low", "mid", "high"] }
+
+  it("rounds a fractional score to the nearest level label", () => {
+    expect(legendFor(levels, "s", 1.2)).toBe("mid")
+    expect(legendFor(levels, "s", 1.6)).toBe("high")
+    expect(legendFor(levels, "s", 2)).toBe("high")
+  })
+
+  it("clamps out-of-range scores", () => {
+    expect(legendFor(levels, "s", -1)).toBe("low")
+    expect(legendFor(levels, "s", 7)).toBe("high")
+  })
+
+  it("returns null without a table, for an unknown id, or on a hole", () => {
+    expect(legendFor(undefined, "s", 1)).toBeNull()
+    expect(legendFor({}, "s", 1)).toBeNull()
+    expect(legendFor({ s: [] }, "s", 1)).toBeNull()
+    // A sparse level table (never produced by parsing, tolerated defensively).
+    const sparse: string[] = new Array(3)
+    sparse[0] = "low"
+    sparse[2] = "high"
+    expect(legendFor({ s: sparse }, "s", 1)).toBeNull()
   })
 })

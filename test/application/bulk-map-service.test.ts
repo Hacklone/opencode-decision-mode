@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
-import { BulkMapService, MAX_RECORDS, chunkResults } from "../../src/application/bulk-map-service"
+import {
+  BulkMapService,
+  MAX_RECORDS,
+  PROGRESS_INTERVAL,
+  chunkResults,
+} from "../../src/application/bulk-map-service"
 import type { BackendRegistry } from "../../src/ports/decision-backend"
 import { BackendError } from "../../src/ports/decision-backend"
 import type { DecisionCache } from "../../src/ports/cache"
@@ -293,6 +298,117 @@ describe("BulkMapService", () => {
     const { bulk } = service({ rows: records(2), backend })
     const { summary } = await bulk.map({ ...baseRequest })
     expect(summary.resolvedModel).toBe("jev")
+  })
+})
+
+describe("score legends and levels table", () => {
+  const scoreQuestion = { id: "sev", type: "score" as const, instructions: "how bad?", criteria: ["low", "high"] }
+  const scoreBackend = () => {
+    const backend = makeBackend()
+    ;(backend.decide as ReturnType<typeof vi.fn>).mockResolvedValue({
+      provider: "openrouter",
+      requestedModel: "jev",
+      resolvedModel: "typesafe/jev-1.14-20261001",
+      answers: { sev: { type: "score", score: 1, legend: "high", probabilities: { low: 0.2, high: 0.8 } } },
+      usage: { inputTokens: 1, outputTokens: 1, costUsd: 0.0001, costSource: "provider" as const },
+    })
+    return backend
+  }
+
+  it("stores level labels once in the summary and strips them from rows", async () => {
+    const { bulk, store } = service({ rows: records(2), backend: scoreBackend() })
+    const { summary, preview } = await bulk.map({ ...baseRequest, questions: [scoreQuestion] })
+    expect(summary.levels).toEqual({ sev: ["low", "high"] })
+    for (const row of [...preview, ...store.saved.pages.flatMap((p) => p.results)]) {
+      expect(row.answers).toEqual({
+        sev: { type: "score", score: 1, legend: null, probabilities: { low: 0.2, high: 0.8 } },
+      })
+    }
+  })
+
+  it("omits the levels table when no score question exists", async () => {
+    const { bulk, store } = service({ rows: records(1) })
+    const { summary } = await bulk.map({ ...baseRequest })
+    expect(summary.levels).toBeUndefined()
+    expect(store.saved.pages[0]!.results[0]!.answers).toEqual({ b: { type: "noul", pTrue: 0.9 } })
+  })
+
+  it("strips legends on cache hits too (cache keeps the full answer)", async () => {
+    const { bulk } = service({ rows: records(2), backend: scoreBackend() })
+    // First run fills the cache; the second serves from it — rows must be
+    // stripped identically on both paths.
+    await bulk.map({ ...baseRequest, questions: [scoreQuestion], concurrency: 1, state: { text: "{{index}}" } })
+    const { summary, preview } = await bulk.map({
+      ...baseRequest,
+      questions: [scoreQuestion],
+      concurrency: 1,
+      state: { text: "{{index}}" },
+    })
+    expect(summary.cached).toBe(2)
+    expect(
+      preview.every((row) => (row.answers!["sev"] as { legend: string | null }).legend === null),
+    ).toBe(true)
+  })
+})
+
+describe("preview control", () => {
+  it("defaults to 10 and honours numeric and false values", async () => {
+    const { bulk } = service({ rows: records(12) })
+    expect((await bulk.map({ ...baseRequest })).preview).toHaveLength(10)
+    expect((await bulk.map({ ...baseRequest, preview: 3 })).preview).toHaveLength(3)
+    expect((await bulk.map({ ...baseRequest, preview: 0 })).preview).toEqual([])
+    expect((await bulk.map({ ...baseRequest, preview: -5 })).preview).toEqual([])
+  })
+
+  it("clamps large previews to MAX_PREVIEW_SIZE", async () => {
+    const { bulk } = service({ rows: records(60) })
+    expect((await bulk.map({ ...baseRequest, preview: 999 })).preview).toHaveLength(50)
+  })
+})
+
+describe("cache bypass", () => {
+  it("skips the cache read but refreshes the cache with fresh answers", async () => {
+    const { bulk, backend } = service({ rows: records(2) })
+    await bulk.map({ ...baseRequest })
+    expect(vi.mocked(backend.decide).mock.calls.length).toBe(2)
+
+    // Bypass: cache has both records, yet the backend is called again.
+    const bypassed = await bulk.map({ ...baseRequest, cache: "bypass" })
+    expect(bypassed.summary.cached).toBe(0)
+    expect(vi.mocked(backend.decide).mock.calls.length).toBe(4)
+
+    // The bypass run's writes refreshed the cache: a normal run hits it again.
+    const cached = await bulk.map({ ...baseRequest })
+    expect(cached.summary.cached).toBe(2)
+    expect(vi.mocked(backend.decide).mock.calls.length).toBe(4)
+  })
+})
+
+describe("progress reporting", () => {
+  it("reports every PROGRESS_INTERVAL completions and once at the end", async () => {
+    const { bulk } = service({ rows: records(120) })
+    const onProgress = vi.fn()
+    await bulk.map({ ...baseRequest, onProgress })
+    const dones = onProgress.mock.calls.map((call) => call[0])
+    expect([...dones].sort((a, b) => a - b)).toEqual([50, 100, 120])
+    expect(onProgress.mock.calls.every((call) => call[1] === 120)).toBe(true)
+    expect(onProgress).toHaveBeenLastCalledWith(120, 120)
+    expect(PROGRESS_INTERVAL).toBe(50)
+  })
+
+  it("reports a single record once", async () => {
+    const { bulk } = service({ rows: records(1) })
+    const onProgress = vi.fn()
+    await bulk.map({ ...baseRequest, onProgress })
+    expect(onProgress).toHaveBeenCalledTimes(1)
+    expect(onProgress).toHaveBeenCalledWith(1, 1)
+  })
+
+  it("reports skipped records too", async () => {
+    const { bulk } = service({ rows: records(8), backend: makeBackend(() => true) })
+    const onProgress = vi.fn()
+    await bulk.map({ ...baseRequest, onProgress })
+    expect(onProgress).toHaveBeenLastCalledWith(8, 8)
   })
 })
 

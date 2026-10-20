@@ -34,6 +34,12 @@ export interface MapRequest {
   concurrency: number
   offset?: number
   limit?: number
+  /** "bypass" skips the cache read — re-sample identical inputs for variance studies. Writes still refresh the cache. */
+  cache?: "bypass"
+  /** Preview rows in the outcome (0 = none). Defaults to PREVIEW_SIZE. */
+  preview?: number
+  /** Called every PROGRESS_INTERVAL completions and once at the end. */
+  onProgress?: (done: number, total: number) => void
   signal: AbortSignal
 }
 
@@ -49,9 +55,12 @@ export const MAX_RECORDS = 10_000
 export const DEFAULT_CONCURRENCY = 4
 export const MAX_CONCURRENCY = 32
 export const PREVIEW_SIZE = 10
+export const MAX_PREVIEW_SIZE = 50
 export const MAX_SAMPLE = 20
 /** Identical-signature errors that trigger a bail-out before spending the full input. */
 export const SYSTEMATIC_ABORT_AFTER = 6
+/** Completions between progress callbacks. */
+export const PROGRESS_INTERVAL = 50
 
 /**
  * Bulk map: read a source, project per-record state, decide every record with
@@ -95,6 +104,7 @@ export class BulkMapService {
     const resolvedModels = new Map<number, string>()
     let cursor = 0
     let cachedCount = 0
+    let done = 0
 
     // Systematic-failure bail: identical error signatures (digits masked so
     // per-record values don't split a signature) abort the run early instead
@@ -119,20 +129,27 @@ export class BulkMapService {
             record: record.fields,
           }
           skipped += 1
-          continue
+        } else {
+          const decided = await this.decideRecord(record, request, backend)
+          if (decided.resolvedModel !== undefined) {
+            resolvedModels.set(record.index, decided.resolvedModel)
+          }
+          if (decided.result.cacheHit) cachedCount += 1
+          results[slot] = decided.result
+          if (decided.result.status === "error") {
+            // Invariant: decideRecord's only error path always attaches a message.
+            const signature = decided.result.error!.replace(/\d+(?:\.\d+)?/g, "#")
+            const count = (errorSignatures.get(signature) ?? 0) + 1
+            errorSignatures.set(signature, count)
+            if (count >= SYSTEMATIC_ABORT_AFTER) systematicError = decided.result.error!
+          }
         }
-        const decided = await this.decideRecord(record, request, backend)
-        if (decided.resolvedModel !== undefined) {
-          resolvedModels.set(record.index, decided.resolvedModel)
-        }
-        if (decided.result.cacheHit) cachedCount += 1
-        results[slot] = decided.result
-        if (decided.result.status === "error") {
-          // Invariant: decideRecord's only error path always attaches a message.
-          const signature = decided.result.error!.replace(/\d+(?:\.\d+)?/g, "#")
-          const count = (errorSignatures.get(signature) ?? 0) + 1
-          errorSignatures.set(signature, count)
-          if (count >= SYSTEMATIC_ABORT_AFTER) systematicError = decided.result.error!
+        done += 1
+        if (
+          request.onProgress !== undefined &&
+          (done % PROGRESS_INTERVAL === 0 || done === records.length)
+        ) {
+          request.onProgress(done, records.length)
         }
       }
     }
@@ -154,6 +171,12 @@ export class BulkMapService {
     const distinctResolved = new Set(resolvedModels.size > 0 ? [...resolvedModels.values()] : [request.model])
     const resolvedModel = distinctResolved.size === 1 ? [...distinctResolved][0]! : request.model
 
+    // Level labels live once per run, not once per row — see RunSummary.levels.
+    const levels: Record<string, string[]> = {}
+    for (const question of request.questions) {
+      if (question.type === "score") levels[question.id] = question.criteria
+    }
+
     const summary: RunSummary = {
       id: newRunId(this.now),
       provider: request.provider,
@@ -168,13 +191,14 @@ export class BulkMapService {
       durationMs: Math.max(0, this.now() - startedAt),
       createdAt: new Date(this.now()).toISOString(),
       source: { path: request.path, format: request.format, totalRecords: allRecords.length },
+      ...(Object.keys(levels).length > 0 ? { levels } : {}),
     }
 
     await this.store.saveRun({ id: summary.id, summary }, chunkResults(results))
 
     return {
       summary,
-      preview: results.slice(0, PREVIEW_SIZE),
+      preview: results.slice(0, previewSize(request.preview)),
       aborted: systematicError === null ? null : { error: systematicError, skipped },
     }
   }
@@ -206,7 +230,7 @@ export class BulkMapService {
         schemaVersion: CACHE_SCHEMA_VERSION,
       })
 
-      const cached = await this.cache.get(key)
+      const cached = request.cache === "bypass" ? null : await this.cache.get(key)
       if (cached !== null) {
         return {
           result: this.okResult(record, cached.answers, cached.usage, true, request),
@@ -258,13 +282,39 @@ export class BulkMapService {
       key: record.key,
       status: "ok",
       record: record.fields,
-      answers,
+      answers: stripLegends(answers),
       verdict,
       verdicts,
       usage,
       cacheHit,
     }
   }
+}
+
+/**
+ * Stored rows drop the score legend: the level label is derivable from the
+ * run summary's `levels` table plus the score position, and repeating it per
+ * row multiplied artifact size several-fold (6.6 MB run file for 2,683
+ * records). Readers reconstruct via `legendFor`.
+ */
+function stripLegends(answers: Record<string, Answer>): Record<string, Answer> {
+  const stripped: Record<string, Answer> = {}
+  let changed = false
+  for (const [id, answer] of Object.entries(answers)) {
+    if (answer.type === "score" && answer.legend !== null) {
+      stripped[id] = { ...answer, legend: null }
+      changed = true
+    } else {
+      stripped[id] = answer
+    }
+  }
+  return changed ? stripped : answers
+}
+
+function previewSize(value: number | undefined): number {
+  if (value === undefined) return PREVIEW_SIZE
+  if (!Number.isFinite(value) || value < 0) return 0
+  return Math.min(Math.floor(value), MAX_PREVIEW_SIZE)
 }
 
 function clampConcurrency(value: number): number {

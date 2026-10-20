@@ -551,3 +551,79 @@ describe("reportProgress", () => {
     await reportProgress({ signal, progress: vi.fn(async () => { throw new Error("nope") }) }, "hi")
   })
 })
+
+describe("preview, cache bypass, and progress", () => {
+  it("omits the preview with preview:false and limits it numerically", async () => {
+    const { deps } = await decisionDeps({ rows: 3 })
+    const map = buildTools(deps)[1]!
+    const off = JSON.parse(
+      (await map.execute({ source: { path: "d.csv" }, project: ["text"], questions: [question], preview: false }, context)).content,
+    )
+    expect(off.preview).toBeUndefined()
+    const two = JSON.parse(
+      (await map.execute({ source: { path: "d.csv" }, project: ["text"], questions: [question], preview: 2 }, context)).content,
+    )
+    expect(two.preview).toHaveLength(2)
+    const none = JSON.parse(
+      (await map.execute({ source: { path: "d.csv" }, project: ["text"], questions: [question], preview: 0 }, context)).content,
+    )
+    expect(none.preview).toBeUndefined()
+    const yes = JSON.parse(
+      (await map.execute({ source: { path: "d.csv" }, project: ["text"], questions: [question], preview: true }, context)).content,
+    )
+    expect(yes.preview).toHaveLength(3)
+  })
+
+  it("rejects junk preview and cache values", async () => {
+    const { deps } = await decisionDeps()
+    const map = buildTools(deps)[1]!
+    await expect(
+      map.execute({ source: { path: "d.csv" }, project: ["text"], questions: [question], preview: "all" }, context),
+    ).rejects.toThrow(/preview must be a boolean or an integer between 0 and 50/)
+    await expect(
+      map.execute({ source: { path: "d.csv" }, project: ["text"], questions: [question], preview: 51 }, context),
+    ).rejects.toThrow(/preview must be a boolean or an integer between 0 and 50/)
+    await expect(
+      map.execute({ source: { path: "d.csv" }, project: ["text"], questions: [question], cache: "fresh" }, context),
+    ).rejects.toThrow('cache must be "bypass"')
+  })
+
+  it("bypasses the cache on identical records and still refreshes it", async () => {
+    const { deps, backend } = await decisionDeps({ rows: 2 })
+    const map = buildTools(deps)[1]!
+    const input = { source: { path: "d.csv" }, project: ["text"], questions: [question] }
+    await map.execute(input, context)
+    expect(vi.mocked(backend.decide).mock.calls.length).toBe(2)
+    const bypassed = JSON.parse((await map.execute({ ...input, cache: "bypass" }, context)).content)
+    expect(bypassed.summary.cached).toBe(0)
+    expect(vi.mocked(backend.decide).mock.calls.length).toBe(4)
+    const cached = JSON.parse((await map.execute(input, context)).content)
+    expect(cached.summary.cached).toBe(2)
+  })
+
+  it("bypasses the cache for a single decision", async () => {
+    const { deps } = await decisionDeps()
+    const decision = buildTools(deps)[0]!
+    const first = JSON.parse((await decision.execute({ state: "x", questions: [question] }, context)).content)
+    expect(first.cached).toBe(false)
+    const second = JSON.parse((await decision.execute({ state: "x", questions: [question] }, context)).content)
+    expect(second.cached).toBe(true)
+    const bypassed = JSON.parse(
+      (await decision.execute({ state: "x", questions: [question], cache: "bypass" }, context)).content,
+    )
+    expect(bypassed.cached).toBe(false)
+  })
+
+  it("reports judged N/M progress during a run", async () => {
+    const { deps } = await decisionDeps({ rows: 3 })
+    const map = buildTools(deps)[1]!
+    const progress = vi.fn(async (_update: Record<string, unknown>) => {})
+    await map.execute(
+      { source: { path: "d.csv" }, project: ["text"], questions: [question] },
+      { signal, progress },
+    )
+    const statuses = progress.mock.calls.map((call) => call[0]!.status)
+    expect(statuses[0]).toBe("decision_map: starting run")
+    expect(statuses.at(-1)).toBe("decision_map: judged 3/3")
+  })
+})

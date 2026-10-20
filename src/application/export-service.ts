@@ -1,6 +1,6 @@
 import { sha256 } from "./cache-key"
 import type { Answer, PolicySpec, RecordResult, RecordStatus, Verdict } from "../domain/decision-types"
-import { policyFor } from "../domain/decision-types"
+import { legendFor, policyFor } from "../domain/decision-types"
 import { rederiveVerdicts } from "../domain/verdict"
 import type { RunStore } from "../ports/run-store"
 import type { FileSink } from "../ports/file-sink"
@@ -60,7 +60,7 @@ export class ResultsExportService {
       return true
     })
 
-    const content = request.format === "jsonl" ? toJsonl(filtered) : toCsv(filtered)
+    const content = request.format === "jsonl" ? toJsonl(filtered) : toCsv(filtered, summary.levels)
     await this.sink.write(request.path, content)
 
     return {
@@ -80,21 +80,21 @@ function toJsonl(records: readonly RecordResult[]): string {
   return records.map((record) => JSON.stringify(record)).join("\n") + "\n"
 }
 
-/** Flattened answer value for a CSV cell. */
-function answerCell(answer: Answer): string | number {
+/** Flattened answer value for a CSV cell. `legend` is pre-resolved for score answers. */
+function answerCell(answer: Answer, legend: string | null): string | number {
   switch (answer.type) {
     case "noul":
       return answer.pTrue
     case "choice":
       return answer.choice
     case "score":
-      return answer.legend ?? String(answer.score)
+      return legend ?? String(answer.score)
   }
 }
 
 const VERDICT_SUFFIX = "_verdict"
 
-function toCsv(records: readonly RecordResult[]): string {
+function toCsv(records: readonly RecordResult[], levels: Record<string, string[]> | undefined): string {
   const meta = ["_index", "_key", "_status", "_error"]
   const answerIds: string[] = []
   const verdictIds = new Set<string>()
@@ -130,7 +130,10 @@ function toCsv(records: readonly RecordResult[]): string {
         row.push(record.verdicts?.[column.slice(0, -VERDICT_SUFFIX.length)] ?? null)
       } else if (record.answers && column in record.answers) {
         // Invariant: `column in record.answers` guarantees the key exists.
-        row.push(answerCell(record.answers[column]!))
+        const answer = record.answers[column]!
+        const legend =
+          answer.type === "score" ? (answer.legend ?? legendFor(levels, column, answer.score)) : null
+        row.push(answerCell(answer, legend))
       } else {
         row.push(record.record?.[column] ?? null)
       }

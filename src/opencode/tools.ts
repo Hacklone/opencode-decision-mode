@@ -1,7 +1,12 @@
 import type { Answer, PolicySpec, ProviderId, Question } from "../domain/decision-types"
 import { DEFAULT_MODELS, PROVIDERS, isProviderId, parsePolicySpec, parseQuestions } from "../domain/decision-types"
 import type { DecisionService } from "../application/decision-service"
-import { SYSTEMATIC_ABORT_AFTER, type BulkMapService } from "../application/bulk-map-service"
+import {
+  MAX_PREVIEW_SIZE,
+  PREVIEW_SIZE,
+  SYSTEMATIC_ABORT_AFTER,
+  type BulkMapService,
+} from "../application/bulk-map-service"
 import type { ResultQueryService } from "../application/result-query-service"
 import type { ResultsExportService } from "../application/export-service"
 import { formatFromPath } from "../application/projection"
@@ -56,7 +61,7 @@ const QUESTION_SCHEMA = {
       type: "object",
       properties: {
         id: { type: "string", description: "Stable key used in results" },
-        type: { const: "noul", description: "Boolean judgment; answer is the probability of true (pTrue). Phrase so TRUE is the violation/bad outcome — verdicts escalate with pTrue (p>=failAt → FAIL). noul answers carry no confidence value (provider limitation); when you need a confidence-like signal for gating, use |2*pTrue - 1|." },
+        type: { const: "noul", description: "Boolean judgment; answer is the probability of true (pTrue). Phrase so TRUE is the violation/bad outcome — verdicts escalate with pTrue (p>=failAt → FAIL). Noul answers carry no confidence value on the provider wire. pTrue near 0.5 means the judgment is uncertain: gate that by lowering reviewAt so the REVIEW band covers the middle, or use a score question when you need a real confidence value. |2*pTrue - 1| measures extremity, not reliability." },
         instructions: { description: "What to judge; string or structured object" },
         criteria: {
           type: "object",
@@ -119,6 +124,13 @@ const POLICY_SCHEMA = {
 
 const PROVIDER_SCHEMA = { type: "string", enum: [...PROVIDERS] } as const
 
+const CACHE_SCHEMA = {
+  type: "string",
+  enum: ["bypass"],
+  description:
+    "Skip the cache read so identical inputs are re-sampled (variance/repeatability studies); the fresh answer is written back to the cache.",
+} as const
+
 const OUTPUT_SCHEMA = {
   type: "object",
   description:
@@ -129,7 +141,7 @@ const OUTPUT_SCHEMA = {
       type: "string",
       enum: ["jsonl", "csv"],
       description:
-        "Inferred from the .jsonl/.ndjson/.csv/.tsv extension when omitted. jsonl: full lossless rows including the record snapshot. csv: one row per record — _index,_key,_status,_error, one column per question id (+ <qid>_verdict), then the source record's own columns.",
+        "Inferred from the .jsonl/.ndjson/.csv/.tsv extension when omitted. jsonl: full rows including the record snapshot (score level labels are stored once per run in the summary, not per row). csv: one row per record — _index,_key,_status,_error, one column per question id (+ <qid>_verdict), then the source record's own columns.",
     },
   },
   required: ["path"],
@@ -151,7 +163,7 @@ function decisionTool(deps: ToolDeps): ToolDefinition {
   return {
     name: "decision",
     description:
-      "Delegate judgments about ONE item to the decision runtime (Jev / gpt-6-luna). Pass state and questions (noul/choice/score); get typed answers, probabilities, verdicts (PASS/REVIEW/FAIL) and token cost. Use for boolean checks, classifications, scoring. Phrase boolean (noul) questions so TRUE is the bad outcome — verdicts escalate with pTrue. You stay the controller: plan and interpret — do not judge the item yourself.",
+      "Delegate judgments about ONE item to the decision runtime (Jev / gpt-6-luna). Pass state and questions (noul/choice/score); get typed answers, probabilities, verdicts (PASS/REVIEW/FAIL) and token cost. Use for boolean checks, classifications, scoring. Phrase boolean (noul) questions so TRUE is the bad outcome — verdicts escalate with pTrue. `cache: \"bypass\"` re-samples an identical request instead of serving the cached answer. You stay the controller: plan and interpret — do not judge the item yourself.",
     inputSchema: {
       type: "object",
       properties: {
@@ -162,6 +174,7 @@ function decisionTool(deps: ToolDeps): ToolDefinition {
         },
         questions: { type: "array", minItems: 1, items: QUESTION_SCHEMA, description: "Ask one narrow judgment per question; independent questions run in parallel in one request." },
         policy: POLICY_SCHEMA,
+        cache: CACHE_SCHEMA,
         ...targetSchema(),
       },
       required: ["state", "questions"],
@@ -169,6 +182,7 @@ function decisionTool(deps: ToolDeps): ToolDefinition {
     async execute(input, context) {
       const questions = parseQuestions(input["questions"])
       const policy = input["policy"] === undefined ? undefined : parsePolicySpec(input["policy"])
+      const cache = parseCache(input["cache"])
       const { provider, model } = resolveTarget(deps, input)
       const outcome = await deps.decision.decide({
         state: input["state"] as string | object | unknown[],
@@ -176,6 +190,7 @@ function decisionTool(deps: ToolDeps): ToolDefinition {
         policy,
         provider,
         model,
+        cache,
         signal: context.signal,
       })
       const warnings = polarityWarnings(questions, policy)
@@ -199,7 +214,7 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
   return {
     name: "decision_map",
     description:
-      "Decide every record in a CSV/JSONL file via the decision runtime. Give a source path, a state projection (`project: [fields]` — the safe default) or a state template ({{field}} placeholders; \"$record\" = whole row, a leakage footgun when the file carries prior scores) and questions; get a run id, summary (verdict tallies, cost, cache hits) and a preview. CSV parsing handles quoted fields, escaped quotes and embedded newlines — judge the original file, no pre-conversion. Results stay server-side; set `output` to write the FULL result set to a file in this call (token-cheap), or fetch slices with decision_results. Phrase boolean (noul) questions so TRUE is the violation/bad outcome — verdicts escalate with pTrue. Set source.sample to peek at records without judging.",
+      "Decide every record in a CSV/JSONL file via the decision runtime. Give a source path, a state projection (`project: [fields]` — the safe default) or a state template ({{field}} placeholders; \"$record\" = whole row, a leakage footgun when the file carries prior scores) and questions; get a run id, summary (verdict tallies, cost, cache hits) and a preview. CSV parsing handles quoted fields, escaped quotes and embedded newlines — judge the original file, no pre-conversion. Results stay server-side; set `output` to write the FULL result set to a file in this call (token-cheap), or fetch slices with decision_results. On large runs set `preview: false` — the response then carries the summary only. `cache: \"bypass\"` re-samples identical inputs for variance studies. Phrase boolean (noul) questions so TRUE is the violation/bad outcome — verdicts escalate with pTrue. Set source.sample to peek at records without judging.",
     inputSchema: {
       type: "object",
       properties: {
@@ -234,6 +249,12 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
         questions: { type: "array", minItems: 1, items: QUESTION_SCHEMA },
         policy: POLICY_SCHEMA,
         concurrency: { type: "integer", minimum: 1, maximum: 32, description: "Parallel provider requests (default 4)" },
+        preview: {
+          anyOf: [{ type: "boolean" }, { type: "integer", minimum: 0, maximum: 50 }],
+          description:
+            "Preview records in the response (default 10). false omits the preview entirely — the token-safe choice for large runs, where the full result set lives server-side.",
+        },
+        cache: CACHE_SCHEMA,
         output: OUTPUT_SCHEMA,
         ...targetSchema(),
       },
@@ -262,6 +283,8 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
       }
       const questions = parseQuestions(input["questions"])
       const policy = input["policy"] === undefined ? undefined : parsePolicySpec(input["policy"])
+      const preview = parsePreview(input["preview"])
+      const cache = parseCache(input["cache"])
       // Validate the destination BEFORE spending provider calls on the run.
       const output = parseOutput(input["output"])
       const { provider, model } = resolveTarget(deps, input)
@@ -279,6 +302,11 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
         provider,
         model,
         concurrency,
+        preview,
+        cache,
+        onProgress: (done, total) => {
+          void reportProgress(context, `decision_map: judged ${done}/${total}`)
+        },
         offset: asInteger(source["offset"]),
         limit: asInteger(source["limit"]),
         signal: context.signal,
@@ -286,7 +314,7 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
       const response: Record<string, unknown> = {
         run: outcome.summary.id,
         summary: outcome.summary,
-        preview: outcome.preview,
+        ...(outcome.preview.length > 0 ? { preview: outcome.preview } : {}),
       }
       if (outcome.aborted !== null) {
         response["aborted"] = outcome.aborted
@@ -411,6 +439,22 @@ function parseProject(value: unknown): string[] | undefined {
     }
     return name
   })
+}
+
+/** false → 0 (no preview), true → default size, integer → clamped count. */
+function parsePreview(value: unknown): number | undefined {
+  if (value === undefined) return undefined
+  if (typeof value === "boolean") return value ? PREVIEW_SIZE : 0
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_PREVIEW_SIZE) {
+    return value
+  }
+  throw new Error(`preview must be a boolean or an integer between 0 and ${MAX_PREVIEW_SIZE}`)
+}
+
+function parseCache(value: unknown): "bypass" | undefined {
+  if (value === undefined) return undefined
+  if (value === "bypass") return "bypass"
+  throw new Error('cache must be "bypass"')
 }
 
 /**

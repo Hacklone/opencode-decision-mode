@@ -159,4 +159,39 @@ describe("ResultsExportService", () => {
       new ResultsExportService(store(null), sink).export({ run: summary.id, path: "x.csv", format: "csv" }),
     ).rejects.toThrow(/is missing its results/)
   })
+
+  it("reconstructs csv score labels from the summary's levels table", async () => {
+    // New-style run: rows carry legend:null and the summary holds the labels once.
+    const withLevels: RunSummary = { ...summary, levels: { s: ["low", "mid", "high"] } }
+    const stripped: RecordResult[] = [
+      {
+        index: 0,
+        key: "k",
+        status: "ok",
+        record: { text: "hi" },
+        answers: { s: { type: "score", score: 1.2, legend: null, probabilities: {} } },
+        verdict: "PASS",
+        verdicts: {},
+        usage: { inputTokens: 1, outputTokens: 1, costUsd: null, costSource: null },
+      },
+    ]
+    const levelStore: RunStore = {
+      saveRun: async () => {},
+      getSummary: async () => withLevels,
+      getResults: async () => stripped,
+      listSummaries: async () => [withLevels],
+    }
+    const files = new Map<string, string>()
+    const service = new ResultsExportService(levelStore, {
+      write: async (path, content) => {
+        files.set(path, content)
+      },
+    })
+    const csv = await service.export({ run: withLevels.id, path: "out/l.csv", format: "csv" })
+    expect(files.get("out/l.csv")).toBe("_index,_key,_status,_error,s,text\n0,k,ok,,mid,hi\n")
+    // JSONL stays stripped: the legend is re-derivable from the run summary.
+    const jsonl = await service.export({ run: withLevels.id, path: "out/l.jsonl", format: "jsonl" })
+    expect(JSON.parse(files.get("out/l.jsonl")!).answers.s.legend).toBeNull()
+    expect(csv.bytes).toBe(new TextEncoder().encode(files.get("out/l.csv")!).length)
+  })
 })

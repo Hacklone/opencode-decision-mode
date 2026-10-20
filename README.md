@@ -50,7 +50,7 @@ probabilities into actionable labels — per call, global, or per question.
 
 - **One record = one request; errors are isolated per record** — one bad row never corrupts a run.
 - **Systematic-failure bail**: 6 failures with the same signature stop the run and skip the rest, instead of burning your whole input on a broken assumption.
-- **Content-hashed cache**: re-run after fixing a question and only what actually changed hits the provider. Free. Cache keys are content hashes over provider, model, state, questions, and a schema version — so you can always tell what a re-run will reuse.
+- **Content-hashed cache**: re-run after fixing a question and only what actually changed hits the provider. Free. Cache keys are content hashes over provider, model, state, questions, and a schema version — so you can always tell what a re-run will reuse. Identical inputs returning identical answers makes cache-hit counts a provenance check, and `cache: "bypass"` re-samples identical inputs when you need to measure the model's run-to-run variance instead.
 - **Policy iteration is free**: raw answers are the stable artifact and verdicts are derived data. `decision_results {run, policy}` re-derives PASS/REVIEW/FAIL from stored answers under new thresholds without spending a provider call.
 - **File export** (`jsonl` lossless / `csv` join-ready, keyed by record id + index) so a 10 000-row job never needs to page its results through a context window.
 - **Polarity guardrail**: ask a boolean question without stating your threshold policy and the response warns you about the TRUE-means-bad convention before verdicts silently invert.

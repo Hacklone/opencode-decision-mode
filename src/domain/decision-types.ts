@@ -218,7 +218,12 @@ export interface ScoreAnswer {
    * fractional; clamped into the criteria range by the backend).
    */
   score: number
-  /** Nearest level label (provider legend when supplied; null only on legacy stored runs). */
+  /**
+   * Nearest level label. Populated on single-call responses; stored run rows
+   * omit it (null) — the run summary's `levels` table holds each label once
+   * and readers reconstruct it via `legendFor`. Null also survives on legacy
+   * stored runs whose summary predates the levels table.
+   */
   legend: string | null
   /** Distribution over level labels; compact result views omit it. */
   probabilities?: Record<string, number>
@@ -367,6 +372,26 @@ export interface RunSummary {
   durationMs: number
   createdAt: string
   source: RunSourceInfo
+  /**
+   * Score-question level labels, stored once per run instead of repeated in
+   * every row's answers — a 200-character level string otherwise duplicates
+   * once per record per question. Stored rows carry `legend: null`; readers
+   * reconstruct via `legendFor`. Absent on legacy summaries (rows there keep
+   * their inline legends).
+   */
+  levels?: Record<string, string[]>
+}
+
+/** Stored rows may omit the level label; reconstruct it from the run's level table. */
+export function legendFor(
+  levels: Record<string, string[]> | undefined,
+  id: string,
+  score: number,
+): string | null {
+  const table = levels?.[id]
+  if (table === undefined || table.length === 0) return null
+  const index = Math.min(Math.max(Math.round(score), 0), table.length - 1)
+  return table[index] ?? null
 }
 
 export interface RunRecord {

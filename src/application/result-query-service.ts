@@ -1,6 +1,6 @@
 import type { Answer, PolicySpec, RecordResult, RunSummary, Verdict } from "../domain/decision-types"
 import type { RecordStatus } from "../domain/decision-types"
-import { policyFor } from "../domain/decision-types"
+import { legendFor, policyFor } from "../domain/decision-types"
 import { rederiveVerdicts } from "../domain/verdict"
 import type { RunStore } from "../ports/run-store"
 
@@ -66,11 +66,34 @@ export class ResultQueryService {
     const offset = Math.max(0, request.offset ?? 0)
     const limit = clampLimit(request.limit)
     const page = filtered.slice(offset, offset + limit).map((record) =>
-      request.detail === "full" ? record : compact(record),
+      restoreLegends(request.detail === "full" ? record : compact(record), summary.levels),
     )
 
     return { summary, matched: filtered.length, offset, results: page }
   }
+}
+
+/**
+ * Stored run rows omit score legends (they live once in the summary's levels
+ * table); put the label back for presentation. Legacy rows keep their inline
+ * legend, and summaries without a levels table leave null legends alone.
+ */
+function restoreLegends(record: RecordResult, levels: Record<string, string[]> | undefined): RecordResult {
+  if (record.answers === undefined) return record
+  let changed = false
+  const answers: Record<string, Answer> = {}
+  for (const [id, answer] of Object.entries(record.answers)) {
+    if (answer.type === "score" && answer.legend === null) {
+      const legend = legendFor(levels, id, answer.score)
+      if (legend !== null) {
+        answers[id] = { ...answer, legend }
+        changed = true
+        continue
+      }
+    }
+    answers[id] = answer
+  }
+  return changed ? { ...record, answers } : record
 }
 
 function clampLimit(value: number | undefined): number {

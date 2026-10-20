@@ -90,4 +90,24 @@ describe("DecisionService", () => {
       service.decide({ state: "s", questions: [noulQuestion], provider: "openrouter", model: "m", signal }),
     ).rejects.toThrow(/no backend configured for provider openrouter/)
   })
+
+  it("cache bypass skips the read but refreshes the cache", async () => {
+    const b = backend({ b: { type: "noul", pTrue: 0.2 } })
+    const service = new DecisionService(registry(b), new StorageCache(new MemoryKv()))
+    const request = {
+      state: "same",
+      questions: [noulQuestion],
+      provider: "openrouter" as const,
+      model: "typesafe/jev-1.14",
+      signal,
+    }
+    await service.decide(request)
+    const bypassed = await service.decide({ ...request, cache: "bypass" })
+    expect(bypassed.cacheHit).toBe(false)
+    expect(b.decide).toHaveBeenCalledTimes(2)
+    // The bypass run's write refreshed the cache: the next normal call hits it.
+    const after = await service.decide(request)
+    expect(after.cacheHit).toBe(true)
+    expect(b.decide).toHaveBeenCalledTimes(2)
+  })
 })

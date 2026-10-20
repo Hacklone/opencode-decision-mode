@@ -88,11 +88,18 @@ round-trip returns answers, verdicts, provider cost, and cache hits.
   schemaVersion}; only successful responses are cached; verdict policies are
   applied *after* cache retrieval (policy is not part of the key). This
   composition is documented user-facing (feedback round 3): cache behavior
-  must be inferable, not discovered by experiment.
+  must be inferable, not discovered by experiment. `cache: "bypass"` skips
+  the *read* only — writes always refresh the cache, so bypass runs leave
+  the cache fresher, never stale.
 - **Raw answers are the stable artifact; verdicts are derived data.**
   Policy-only changes must be re-derivable at query time
   (`decision_results {run, policy}` re-derives from stored answers) — never
   force a provider re-run for a threshold change.
+- **Derivable payload is stored once, not per row.** Score legends repeat a
+  level string per record; stored rows carry `legend: null` and the labels
+  live once in `RunSummary.levels` (feedback round 4: a 6.6 MB run file was
+  mostly duplicated legend text). Readers reconstruct via `legendFor`; legacy
+  runs with inline legends stay readable.
 - **State projection is the safe default; `$record` is the footgun.**
   `project: [fields]` sends exactly the named raw-typed fields; `"$record"`
   sends the whole row and turns prior scores/annotations into grading
@@ -108,6 +115,12 @@ round-trip returns answers, verdicts, provider cost, and cache hits.
   level range and label with the nearest level. Never reject a finite number.
 - **Usage honesty**: provider-reported cost is reported as such; estimates are
   labeled `"estimated"`, unknowns stay `null` (never coerced to zero).
+- **Noul has no confidence, and we don't fake one.** Verified on the wire
+  (Oct 2026): noul answers are `{type, noul}` only. `|2*pTrue - 1|` measures
+  *extremity*, not reliability (0.49 and 0.51 both score ~0.02; a
+  confidently-wrong 0.9 scores high) — docs must never recommend it as an
+  uncertainty gate. The honest plugin-side gate is the REVIEW band around
+  0.5, or a score question (which does carry confidence).
 - Run results persist in chunks (`runs/<id>/p/<page>`, summary written last);
   page order is reassembled numerically, never trusted from scan order.
 

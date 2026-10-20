@@ -18,6 +18,8 @@ export interface DecisionRequest {
   policy?: PolicySpec
   provider: ProviderId
   model: string
+  /** "bypass" skips the cache read — re-sample identical inputs for variance studies. Writes still refresh the cache. */
+  cache?: "bypass"
   signal: AbortSignal
 }
 
@@ -57,7 +59,7 @@ export class DecisionService {
     let resolvedModel: string
     let cacheHit: boolean
 
-    const cached = await this.cache.get(key)
+    const cached = request.cache === "bypass" ? null : await this.cache.get(key)
     if (cached !== null) {
       answers = cached.answers
       usage = cached.usage

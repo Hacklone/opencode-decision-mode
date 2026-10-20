@@ -146,4 +146,31 @@ describe("ResultQueryService", () => {
     const page = await service.query({ run: summary.id, status: "error", policy: { reviewAt: 0.1, failAt: 0.2 } })
     expect(page.results[0]).toEqual({ index: 1, key: null, status: "error", error: "boom" })
   })
+
+  it("reconstructs score legends from the summary's levels table", async () => {
+    const withLevels: RunSummary = { ...summary, levels: { s: ["low", "mid", "high"] } }
+    const stored: RecordResult[] = [
+      result({ index: 0, answers: { s: { type: "score", score: 1.2, legend: null, probabilities: {} } } }),
+    ]
+    const levelStore: RunStore = {
+      saveRun: async () => {},
+      getSummary: async () => withLevels,
+      getResults: async () => stored,
+      listSummaries: async () => [withLevels],
+    }
+    const service = new ResultQueryService(levelStore)
+    const compact = await service.query({ run: withLevels.id })
+    expect(compact.results[0]!.answers!["s"]).toEqual({ type: "score", score: 1.2, legend: "mid" })
+    const full = await service.query({ run: withLevels.id, detail: "full" })
+    expect(full.results[0]!.answers!["s"]).toMatchObject({ legend: "mid", probabilities: {} })
+  })
+
+  it("leaves null legends alone when the summary has no levels table", async () => {
+    // Legacy run: rows carry null legends and the summary predates levels.
+    const service = new ResultQueryService(
+      store([result({ index: 0, answers: { s: { type: "score", score: 1, legend: null, probabilities: {} } } })]),
+    )
+    const page = await service.query({ run: summary.id })
+    expect(page.results[0]!.answers!["s"]).toEqual({ type: "score", score: 1, legend: null })
+  })
 })
