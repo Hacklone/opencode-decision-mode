@@ -139,6 +139,10 @@ round-trip returns answers, verdicts, provider cost, and cache hits.
   keys and stores the desugared (provider) shape; stored rows carry the
   resugared shape. Empirically faithful: mean |Δ| 0.067 vs plain noul,
   100% same-side-of-0.5 agreement over 120 gate judgments (feedback round 5).
+  Not byte-identical, though: the two-level phrasing shifts coarse verdict
+  tallies even when pTrue barely moves (FAIL 17→38 across a 2,683-record
+  catalog at mean |Δ| 0.051) — pick one mode per scoring program, never mix
+  them (feedback round 6).
 - Run results persist in chunks (`runs/<id>/p/<page>`, summary written last);
   page order is reassembled numerically, never trusted from scan order.
 

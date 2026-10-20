@@ -70,7 +70,7 @@ const QUESTION_SCHEMA = {
         },
         withConfidence: {
           type: "boolean",
-          description: "Ask through a two-level score question internally so the answer carries a REAL confidence value (plain noul answers never do). The answer still comes back noul-shaped: pTrue plus confidence. Use for calibration-critical binary gates.",
+          description: "Ask through a two-level score question internally so the answer carries a REAL confidence value (plain noul answers never do). The answer still comes back noul-shaped: pTrue plus confidence. Use for calibration-critical binary gates. Not byte-identical to plain noul: the two-level phrasing can shift coarse verdict tallies even when pTrue barely moves — don't mix the two modes within one scoring program.",
         },
       },
       required: ["id", "type", "instructions"],
