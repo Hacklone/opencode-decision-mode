@@ -113,7 +113,10 @@ round-trip returns answers, verdicts, provider cost, and cache hits.
   model input" is the worst failure mode a scoring pipeline has, so every
   run summary carries `inputHash` (state composition + questions; provider,
   policy, per-record state excluded) and docs tell users to diff it before
-  comparing runs.
+  comparing runs. State serialization is itself part of the instrument —
+  template vs `project`/`context` composition shifted 93.9% → 89.0% agreement
+  in a real catalog run with identical content — so docs say "keep one
+  composition per scoring program".
 - **Errors are semantic answers' siblings**: per-record OK/ERROR in runs; a
   backend error never corrupts other records. When 6 failures share the same
   signature (digits masked), the run bails out early and the rest are marked
@@ -129,8 +132,13 @@ round-trip returns answers, verdicts, provider cost, and cache hits.
   *extremity*, not reliability (0.49 and 0.51 both score ~0.02; a
   confidently-wrong 0.9 scores high) — docs must never recommend it as an
   uncertainty gate. The honest plugin-side gates are the REVIEW band around
-  0.5 and two-level score questions (score answers carry a real confidence
-  value; two levels make them a drop-in noul alternative).
+  0.5 and two-level score questions — now first-class: `withConfidence: true`
+  on a noul question desugars to a two-level score (level 0 = false, level 1
+  = true) before the provider and resugars the answer back to
+  `{type: "noul", pTrue, confidence}` (domain/noul-confidence.ts). The cache
+  keys and stores the desugared (provider) shape; stored rows carry the
+  resugared shape. Empirically faithful: mean |Δ| 0.067 vs plain noul,
+  100% same-side-of-0.5 agreement over 120 gate judgments (feedback round 5).
 - Run results persist in chunks (`runs/<id>/p/<page>`, summary written last);
   page order is reassembled numerically, never trusted from scan order.
 

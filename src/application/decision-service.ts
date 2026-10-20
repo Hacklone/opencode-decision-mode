@@ -12,6 +12,7 @@ import { BackendError, type BackendRegistry } from "../ports/decision-backend"
 import { CACHE_SCHEMA_VERSION, type DecisionCache } from "../ports/cache"
 import { cacheKeyFor } from "./cache-key"
 import { composeContext } from "./projection"
+import { desugarQuestions, resugarAnswers } from "../domain/noul-confidence"
 
 export interface DecisionRequest {
   state: string | object | unknown[]
@@ -49,24 +50,28 @@ export class DecisionService {
   ) {}
 
   async decide(request: DecisionRequest): Promise<DecisionOutcome> {
+    // Confidence-bearing noul questions travel as two-level score questions;
+    // the cache keys and stores the provider's raw (desugared-shaped)
+    // answers, and every consumer sees the resugared noul shape.
+    const questions = desugarQuestions(request.questions)
     const state =
       request.context === undefined ? request.state : composeContext(request.context, request.state)
     const key = cacheKeyFor({
       provider: request.provider,
       model: request.model,
       state,
-      questions: request.questions,
+      questions,
       schemaVersion: CACHE_SCHEMA_VERSION,
     })
 
-    let answers: Record<string, Answer>
+    let raw: Record<string, Answer>
     let usage: Usage
     let resolvedModel: string
     let cacheHit: boolean
 
     const cached = request.cache === "bypass" ? null : await this.cache.get(key)
     if (cached !== null) {
-      answers = cached.answers
+      raw = cached.answers
       usage = cached.usage
       resolvedModel = cached.resolvedModel
       cacheHit = true
@@ -77,16 +82,17 @@ export class DecisionService {
       }
       const response = await backend.decide({
         state: state as string | object | unknown[],
-        questions: request.questions,
+        questions,
         model: request.model,
         signal: request.signal,
       })
-      answers = response.answers
+      raw = response.answers
       usage = response.usage
       resolvedModel = response.resolvedModel
-      await this.cache.set(key, { answers, usage, resolvedModel })
+      await this.cache.set(key, { answers: raw, usage, resolvedModel })
       cacheHit = false
     }
+    const answers = resugarAnswers(request.questions, raw)
 
     const { verdicts, verdict } = applyVerdicts(answers, (id) =>
       policyFor(request.policy, id),

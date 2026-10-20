@@ -456,3 +456,61 @@ describe("chunkResults", () => {
     expect(pages[2]!.results).toHaveLength(50)
   })
 })
+
+describe("confidence-bearing noul questions", () => {
+  const confidenceQuestion = {
+    id: "b",
+    type: "noul" as const,
+    instructions: "is it spam?",
+    withConfidence: true as const,
+  }
+  const confidenceBackend = () => {
+    const backend = makeBackend()
+    ;(backend.decide as ReturnType<typeof vi.fn>).mockResolvedValue({
+      provider: "openrouter",
+      requestedModel: "jev",
+      resolvedModel: "typesafe/jev-1.14-20261001",
+      answers: { b: { type: "score", score: 0.93, legend: null, confidence: 0.88 } },
+      usage: { inputTokens: 1, outputTokens: 1, costUsd: 0.0001, costSource: "provider" as const },
+    })
+    return backend
+  }
+
+  it("asks the two-level score at the provider and stores noul-shaped answers", async () => {
+    const { bulk, store, backend } = service({ rows: records(2), backend: confidenceBackend() })
+    const { summary, preview } = await bulk.map({ ...baseRequest, questions: [confidenceQuestion] })
+    // The provider saw the desugared instrument: level 0 = false, level 1 = true.
+    expect(backend.decide).toHaveBeenCalledWith(
+      expect.objectContaining({
+        questions: [
+          {
+            id: "b",
+            type: "score",
+            instructions: "is it spam?",
+            criteria: ["false — the predicate does not hold", "true — the predicate holds"],
+          },
+        ],
+      }),
+    )
+    for (const row of [...preview, ...store.saved.pages.flatMap((p) => p.results)]) {
+      expect(row.answers).toEqual({ b: { type: "noul", pTrue: 0.93, confidence: 0.88 } })
+      expect(row.verdict).toBe("FAIL")
+    }
+    // Levels are built from the caller's questions, not the desugared ones —
+    // no score answers exist for the confidence-bearing id.
+    expect(summary.levels).toBeUndefined()
+  })
+
+  it("resugars answers on cache hits too (the cache keeps the provider shape)", async () => {
+    const { bulk } = service({ rows: records(2), backend: confidenceBackend() })
+    await bulk.map({ ...baseRequest, questions: [confidenceQuestion], concurrency: 1, state: { text: "{{index}}" } })
+    const { summary, preview } = await bulk.map({
+      ...baseRequest,
+      questions: [confidenceQuestion],
+      concurrency: 1,
+      state: { text: "{{index}}" },
+    })
+    expect(summary.cached).toBe(2)
+    expect(preview[0]!.answers).toEqual({ b: { type: "noul", pTrue: 0.93, confidence: 0.88 } })
+  })
+})

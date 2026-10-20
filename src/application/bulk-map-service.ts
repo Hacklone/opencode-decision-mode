@@ -18,6 +18,7 @@ import type { SourceReader, SourceRecord } from "../ports/source-reader"
 import { newRunId } from "./ids"
 import { composeContext, projectRecord, projectState } from "./projection"
 import { cacheKeyFor, inputHashFor } from "./cache-key"
+import { desugarQuestions, resugarAnswers } from "../domain/noul-confidence"
 
 export interface MapRequest {
   /** Path to the source file (.csv/.tsv/.jsonl/.ndjson); resolved by the caller. */
@@ -102,6 +103,11 @@ export class BulkMapService {
       throw new BackendError(`no backend configured for provider ${request.provider}`)
     }
 
+    // Confidence-bearing noul questions travel as two-level score questions;
+    // cache keys and stored answers use the desugared (provider) shape, and
+    // every stored row carries the resugared noul shape.
+    const questions = desugarQuestions(request.questions)
+
     const results: RecordResult[] = new Array(records.length)
     const resolvedModels = new Map<number, string>()
     let cursor = 0
@@ -132,7 +138,7 @@ export class BulkMapService {
           }
           skipped += 1
         } else {
-          const decided = await this.decideRecord(record, request, backend)
+          const decided = await this.decideRecord(record, request, backend, questions)
           if (decided.resolvedModel !== undefined) {
             resolvedModels.set(record.index, decided.resolvedModel)
           }
@@ -197,7 +203,9 @@ export class BulkMapService {
         state: request.state,
         project: request.project,
         context: request.context,
-        questions: request.questions,
+        // The desugared instrument: a confidence-bearing noul and the
+        // equivalent manual two-level score share one fingerprint.
+        questions,
       }),
       ...(Object.keys(levels).length > 0 ? { levels } : {}),
     }
@@ -224,6 +232,7 @@ export class BulkMapService {
     record: SourceRecord,
     request: MapRequest,
     backend: NonNullable<BackendRegistry[ProviderId]>,
+    questions: Question[],
   ): Promise<{ result: RecordResult; resolvedModel: string | undefined }> {
     try {
       const projected =
@@ -236,21 +245,27 @@ export class BulkMapService {
         provider: request.provider,
         model: request.model,
         state,
-        questions: request.questions,
+        questions,
         schemaVersion: CACHE_SCHEMA_VERSION,
       })
 
       const cached = request.cache === "bypass" ? null : await this.cache.get(key)
       if (cached !== null) {
         return {
-          result: this.okResult(record, cached.answers, cached.usage, true, request),
+          result: this.okResult(
+            record,
+            resugarAnswers(request.questions, cached.answers),
+            cached.usage,
+            true,
+            request,
+          ),
           resolvedModel: cached.resolvedModel,
         }
       }
 
       const response = await backend.decide({
         state: state as string | object | unknown[],
-        questions: request.questions,
+        questions,
         model: request.model,
         signal: request.signal,
       })
@@ -260,7 +275,13 @@ export class BulkMapService {
         resolvedModel: response.resolvedModel,
       })
       return {
-        result: this.okResult(record, response.answers, response.usage, false, request),
+        result: this.okResult(
+          record,
+          resugarAnswers(request.questions, response.answers),
+          response.usage,
+          false,
+          request,
+        ),
         resolvedModel: response.resolvedModel,
       }
     } catch (error) {

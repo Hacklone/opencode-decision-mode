@@ -126,6 +126,45 @@ describe("decision tool", () => {
     })
   })
 
+  it("desugars withConfidence noul into a two-level score and answers noul-shaped with confidence", async () => {
+    const { deps, backend } = await decisionDeps()
+    ;(backend.decide as ReturnType<typeof vi.fn>).mockResolvedValue({
+      provider: "openrouter",
+      requestedModel: "typesafe/jev-1.14",
+      resolvedModel: "typesafe/jev-1.14-20261001",
+      answers: { b: { type: "score", score: 0.93, legend: null, confidence: 0.88 } },
+      usage: { inputTokens: 10, outputTokens: 2, costUsd: 0.0007, costSource: "provider" as const },
+    })
+    const decision = buildTools(deps)[0]!
+    const output = JSON.parse(
+      (
+        await decision.execute(
+          {
+            state: "hi",
+            questions: [{ id: "b", type: "noul", instructions: "is it spam?", withConfidence: true }],
+          },
+          context,
+        )
+      ).content,
+    )
+    // The provider saw the desugared two-level score (level 0 = false, level 1 = true).
+    expect(backend.decide).toHaveBeenCalledWith(
+      expect.objectContaining({
+        questions: [
+          {
+            id: "b",
+            type: "score",
+            instructions: "is it spam?",
+            criteria: ["false — the predicate does not hold", "true — the predicate holds"],
+          },
+        ],
+      }),
+    )
+    // The caller sees the noul shape they asked for, plus real confidence.
+    expect(output.answers).toEqual({ b: { type: "noul", pTrue: 0.93, confidence: 0.88 } })
+    expect(output.verdict).toBe("FAIL")
+  })
+
   it("propagates invalid questions as errors", async () => {
     const { deps } = await decisionDeps()
     const decision = buildTools(deps)[0]!

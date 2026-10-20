@@ -100,6 +100,18 @@ describe("ResultQueryService", () => {
     expect(full.results[0]!.record).toEqual({ text: "row zero" })
   })
 
+  it("keeps a confidence-bearing noul answer's confidence in both views", async () => {
+    const confident: RecordResult = {
+      ...result({}),
+      answers: { b: { type: "noul", pTrue: 0.93, confidence: 0.88 } },
+    }
+    const service = new ResultQueryService(store([confident]))
+    const compact = await service.query({ run: summary.id, limit: 1 })
+    expect(compact.results[0]!.answers).toEqual({ b: { type: "noul", pTrue: 0.93, confidence: 0.88 } })
+    const full = await service.query({ run: summary.id, limit: 1, detail: "full" })
+    expect(full.results[0]!.answers).toEqual({ b: { type: "noul", pTrue: 0.93, confidence: 0.88 } })
+  })
+
   it("compacts error records without inventing fields", async () => {
     const service = new ResultQueryService(store(rows))
     const page = await service.query({ run: summary.id, status: "error" })

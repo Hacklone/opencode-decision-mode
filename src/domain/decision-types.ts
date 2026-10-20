@@ -66,6 +66,13 @@ export interface NoulQuestion {
   type: "noul"
   instructions: Instructions
   criteria?: NoulCriteria
+  /**
+   * Ask through a two-level score question internally so the answer carries a
+   * real confidence value (plain noul answers never do on the provider wire).
+   * The answer still comes back noul-shaped: pTrue plus confidence. See
+   * domain/noul-confidence.ts.
+   */
+  withConfidence?: boolean
 }
 
 /** Map of option value → description (null means the value is self-describing). */
@@ -116,6 +123,12 @@ export function parseQuestion(input: unknown): Question {
   }
   if (raw.type === "noul") {
     const question: NoulQuestion = { id, type: "noul", instructions }
+    if (raw.withConfidence !== undefined) {
+      if (typeof raw.withConfidence !== "boolean") {
+        throw new DecisionInputError(`question ${id}: withConfidence must be a boolean`)
+      }
+      if (raw.withConfidence) question.withConfidence = true
+    }
     if (raw.criteria !== undefined) {
       if (typeof raw.criteria !== "object" || raw.criteria === null) {
         throw new DecisionInputError(`question ${id}: noul criteria must be an object`)
@@ -201,6 +214,12 @@ export interface NoulAnswer {
   type: "noul"
   /** Probability that the predicate holds (true). */
   pTrue: number
+  /**
+   * Real confidence, present only when the question was asked with
+   * `withConfidence` (desugared to a two-level score internally); the
+   * provider wire format for plain noul carries no confidence value.
+   */
+  confidence?: number
 }
 
 export interface ChoiceAnswer {

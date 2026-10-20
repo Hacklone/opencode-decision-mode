@@ -117,7 +117,10 @@ function compact(record: RecordResult): RecordResult {
     for (const [id, answer] of Object.entries(record.answers)) {
       switch (answer.type) {
         case "noul":
-          answers[id] = { type: "noul", pTrue: answer.pTrue }
+          answers[id] =
+            answer.confidence === undefined
+              ? { type: "noul", pTrue: answer.pTrue }
+              : { type: "noul", pTrue: answer.pTrue, confidence: answer.confidence }
           break
         case "choice":
           answers[id] = { type: "choice", choice: answer.choice }

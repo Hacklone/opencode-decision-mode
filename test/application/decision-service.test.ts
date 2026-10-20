@@ -130,4 +130,57 @@ describe("DecisionService", () => {
     await service.decide({ ...request, context: "Other frame." })
     expect(b.decide).toHaveBeenCalledTimes(2)
   })
+
+  it("asks confidence-bearing noul questions as two-level scores and resugars the answer", async () => {
+    const b = backend({ g: { type: "score", score: 0.93, legend: null, confidence: 0.88 } })
+    const service = new DecisionService(registry(b), new StorageCache(new MemoryKv()))
+    const request = {
+      state: "s",
+      questions: [{ id: "g", type: "noul" as const, instructions: "TRUE if the gate fails", withConfidence: true }],
+      provider: "openrouter" as const,
+      model: "m",
+      signal,
+    }
+    const outcome = await service.decide(request)
+    expect(b.decide).toHaveBeenCalledWith(
+      expect.objectContaining({
+        questions: [
+          {
+            id: "g",
+            type: "score",
+            instructions: "TRUE if the gate fails",
+            criteria: ["false — the predicate does not hold", "true — the predicate holds"],
+          },
+        ],
+      }),
+    )
+    expect(outcome.answers.g).toEqual({ type: "noul", pTrue: 0.93, confidence: 0.88 })
+    expect(outcome.verdicts).toEqual({ g: "FAIL" })
+    // The cache stores the raw provider shape; a cache hit resugars it again.
+    const second = await service.decide(request)
+    expect(second.cacheHit).toBe(true)
+    expect(second.answers.g).toEqual({ type: "noul", pTrue: 0.93, confidence: 0.88 })
+    expect(b.decide).toHaveBeenCalledTimes(1)
+  })
+
+  it("shares the cache between a confidence-bearing noul and the equivalent two-level score", async () => {
+    const b = backend({ g: { type: "score", score: 0.93, legend: null, confidence: 0.88 } })
+    const service = new DecisionService(registry(b), new StorageCache(new MemoryKv()))
+    const criteria = ["false — the predicate does not hold", "true — the predicate holds"]
+    const scoreRequest = {
+      state: "s",
+      questions: [{ id: "g", type: "score" as const, instructions: "TRUE if the gate fails", criteria }],
+      provider: "openrouter" as const,
+      model: "m",
+      signal,
+    }
+    await service.decide(scoreRequest)
+    const outcome = await service.decide({
+      ...scoreRequest,
+      questions: [{ id: "g", type: "noul" as const, instructions: "TRUE if the gate fails", withConfidence: true }],
+    })
+    expect(outcome.cacheHit).toBe(true)
+    expect(outcome.answers.g).toEqual({ type: "noul", pTrue: 0.93, confidence: 0.88 })
+    expect(b.decide).toHaveBeenCalledTimes(1)
+  })
 })

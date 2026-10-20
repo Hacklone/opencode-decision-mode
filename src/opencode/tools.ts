@@ -61,12 +61,16 @@ const QUESTION_SCHEMA = {
       type: "object",
       properties: {
         id: { type: "string", description: "Stable key used in results" },
-        type: { const: "noul", description: "Boolean judgment; answer is the probability of true (pTrue). Phrase so TRUE is the violation/bad outcome — verdicts escalate with pTrue (p>=failAt → FAIL). Noul answers carry no confidence value on the provider wire. pTrue near 0.5 means the judgment is uncertain: gate that by lowering reviewAt so the REVIEW band covers the middle. When you need a real confidence value for a binary gate, use a two-level score question instead — score answers carry confidence. |2*pTrue - 1| measures extremity, not reliability." },
+        type: { const: "noul", description: "Boolean judgment; answer is the probability of true (pTrue). Phrase so TRUE is the violation/bad outcome — verdicts escalate with pTrue (p>=failAt → FAIL). Noul answers carry no confidence value on the provider wire. pTrue near 0.5 means the judgment is uncertain: gate that by lowering reviewAt so the REVIEW band covers the middle, or set withConfidence for a real confidence value. |2*pTrue - 1| measures extremity, not reliability." },
         instructions: { description: "What to judge; string or structured object" },
         criteria: {
           type: "object",
           properties: { true: {}, false: {} },
           description: "Optional descriptions of what true/false mean",
+        },
+        withConfidence: {
+          type: "boolean",
+          description: "Ask through a two-level score question internally so the answer carries a REAL confidence value (plain noul answers never do). The answer still comes back noul-shaped: pTrue plus confidence. Use for calibration-critical binary gates.",
         },
       },
       required: ["id", "type", "instructions"],
@@ -170,7 +174,7 @@ function decisionTool(deps: ToolDeps): ToolDefinition {
   return {
     name: "decision",
     description:
-      "Delegate judgments about ONE item to the decision runtime (Jev / gpt-6-luna). Pass state and questions (noul/choice/score); get typed answers, probabilities, verdicts (PASS/REVIEW/FAIL) and token cost. Use for boolean checks, classifications, scoring. Phrase boolean (noul) questions so TRUE is the bad outcome — verdicts escalate with pTrue. `context` adds a constant framing preamble to the state without touching your state value. `cache: \"bypass\"` re-samples an identical request instead of serving the cached answer. You stay the controller: plan and interpret — do not judge the item yourself.",
+      "Delegate judgments about ONE item to the decision runtime (Jev / gpt-6-luna). Pass state and questions (noul/choice/score); get typed answers, probabilities, verdicts (PASS/REVIEW/FAIL) and token cost. Use for boolean checks, classifications, scoring. Phrase boolean (noul) questions so TRUE is the bad outcome — verdicts escalate with pTrue; set withConfidence on calibration-critical gates to also get a real confidence value. `context` adds a constant framing preamble to the state without touching your state value. `cache: \"bypass\"` re-samples an identical request instead of serving the cached answer. You stay the controller: plan and interpret — do not judge the item yourself.",
     inputSchema: {
       type: "object",
       properties: {
@@ -224,7 +228,7 @@ function decisionMapTool(deps: ToolDeps): ToolDefinition {
   return {
     name: "decision_map",
     description:
-      "Decide every record in a CSV/JSONL file via the decision runtime. Give a source path, a state projection (`project: [fields]` — the safe default) or a state template ({{field}} placeholders; \"$record\" = whole row, a leakage footgun when the file carries prior scores) and questions; get a run id, summary (verdict tallies, cost, cache hits) and a preview. Constant framing (task setup, audience, scale definitions) belongs in `context` — it composes with both `project` and a state template instead of being bent into per-record fields; the summary's inputHash fingerprints the instrument, so diff it across runs to catch an accidentally changed preamble. CSV parsing handles quoted fields, escaped quotes and embedded newlines — judge the original file, no pre-conversion. Results stay server-side; set `output` to write the FULL result set to a file in this call (token-cheap), or fetch slices with decision_results. On large runs set `preview: false` — the response then carries the summary only. `cache: \"bypass\"` re-samples identical inputs for variance studies. Phrase boolean (noul) questions so TRUE is the violation/bad outcome — verdicts escalate with pTrue. Set source.sample to peek at records without judging.",
+      "Decide every record in a CSV/JSONL file via the decision runtime. Give a source path, a state projection (`project: [fields]` — the safe default) or a state template ({{field}} placeholders; \"$record\" = whole row, a leakage footgun when the file carries prior scores) and questions; get a run id, summary (verdict tallies, cost, cache hits) and a preview. Constant framing (task setup, audience, scale definitions) belongs in `context` — it composes with both `project` and a state template instead of being bent into per-record fields; the summary's inputHash fingerprints the instrument, so diff it across runs to catch an accidentally changed preamble, and keep one state composition per scoring program (template vs project/context can shift borderline judgments even when the content matches). CSV parsing handles quoted fields, escaped quotes and embedded newlines — judge the original file, no pre-conversion. Results stay server-side; set `output` to write the FULL result set to a file in this call (token-cheap), or fetch slices with decision_results. On large runs set `preview: false` — the response then carries the summary only. `cache: \"bypass\"` re-samples identical inputs for variance studies. Phrase boolean (noul) questions so TRUE is the violation/bad outcome — verdicts escalate with pTrue; set withConfidence on calibration-critical gates to also get a real confidence value. Set source.sample to peek at records without judging.",
     inputSchema: {
       type: "object",
       properties: {
@@ -505,7 +509,7 @@ export function compactAnswers(answers: Record<string, Answer>) {
   for (const [id, answer] of Object.entries(answers)) {
     switch (answer.type) {
       case "noul":
-        out[id] = { type: "noul", pTrue: round(answer.pTrue) }
+        out[id] = withConfidence({ type: "noul", pTrue: round(answer.pTrue) }, answer.confidence)
         break
       case "choice":
         out[id] = withConfidence({ type: "choice", choice: answer.choice }, answer.confidence)
