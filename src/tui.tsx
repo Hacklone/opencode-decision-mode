@@ -1,3 +1,7 @@
+/** @jsxImportSource @opentui/solid */
+// Pragma + shipped tsconfig both pin the JSX runtime: the npm tarball is
+// compiled in a cache dir where the loader's tsconfig lookup finds nothing,
+// and its default (react/jsx-runtime) fails to resolve there.
 import { Plugin } from "@opencode/plugin/tui"
 import { createStore } from "solid-js/store"
 
