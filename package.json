@@ -1,6 +1,6 @@
 {
   "name": "@coool/opencode-decision-mode",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "OpenCode v2 plugin: delegate judgments to Decision models (TypeSafe Jev via OpenRouter or direct, OpenAI gpt-6-luna) while your controller model stays the control plane.",
   "type": "module",
   "license": "MIT",
