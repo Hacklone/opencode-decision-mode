@@ -57,6 +57,21 @@ probabilities into actionable labels — per call, global, or per question.
 - **File export** (`jsonl` lossless / `csv` join-ready, keyed by record id + index) so a 10 000-row job never needs to page its results through a context window.
 - **Polarity guardrail**: ask a boolean question without stating your threshold policy and the response warns you about the TRUE-means-bad convention before verdicts silently invert.
 
+## What leaves your machine
+
+Exactly the state you compose per record, nothing else — your file, the other
+columns, and the controller's context all stay put. `project: ["title", "body"]`
+is how you keep it that way; `$record` ships the whole row, so don't reach for
+it on files with sensitive columns. The provider key is the one OpenCode already
+has registered — no additional secret to manage, and it authorizes whatever the
+agent chooses to send, same as every other tool the agent can drive.
+
+Two properties make that delegation auditable rather than blind: every run
+persists what was actually sent (per-record snapshots plus an `inputHash`
+fingerprint of the state composition), and exports carry a SHA-256 checksum, so
+after the fact you can enumerate exactly what left instead of reconstructing it
+from shell history.
+
 ## Providers
 
 | Provider | Default model | Pricing |
